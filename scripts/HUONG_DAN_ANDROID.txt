@@ -1,0 +1,81 @@
+================================================================================
+  APP NAY DUNG "DEVELOPMENT BUILD" (expo-dev-client) — KHONG DUNG EXPO GO
+================================================================================
+
+A) Loi "This computer is not authorized for developing on Android"
+   - RUT CAP USB dien thoai ra (neu co).
+   - Chi bat ANDROID EMULATOR (Android Studio -> Device Manager -> Play).
+   - Mo PowerShell MOI:
+       adb kill-server
+       adb start-server
+       adb devices
+     Phai thay dong "emulator-5554    device" (chu KHONG phai "unauthorized").
+   - Neu van "unauthorized": tren dien thoai vao Developer options ->
+     Thu hoi uy quyen go loi USB -> cam lai cap -> bam Cho phep tren dien thoai.
+
+B) DUNG mo Expo Go cho project nay (se khong thay server / thieu native).
+   Can app DEV CLIENT da cai tren may: package phai la com.zena.massagenow (trung app.json).
+   Ban beta tren CH Play la ban RELEASE — khong tu dong noi Metro khi dev.
+   De code them tinh nang: cai ban debug/dev len emulator hoac may that (npm run android),
+   roi chay npm run dev va mo app Zena.
+
+C) Lan dau / sau khi doi native code:
+       cd duong-dan-toi-massage-now
+       npm run android
+   (Can emulator da "device" nhu tren.)
+
+D) Hang ngay khi code JS:
+   Terminal 1:
+       npm run dev
+   Tren emulator: mo icon app Zena (KHONG phai Expo Go). App se noi Metro.
+
+   Hoac trong terminal Metro bam phim "a" de mo tren Android (neu adb on).
+
+================================================================================
+  Loi "It took too long to start the Android emulator: Pixel_9"
+================================================================================
+  Expo tu mo AVD nhung may yeu / lan dau boot rat lau -> timeout.
+  CACH ON DINH:
+  1) Mo SAN emulator TRUOC (Android Studio -> Device Manager -> Play cho Pixel_9).
+  2) Doi den khi vao man hinh chinh Android (khong con chu "android").
+  3) Mo PowerShell:
+       adb devices
+     Phai thay: emulator-5554    device
+  4) Sau do moi chay: npm run android   hoac   npx expo run:android
+  Hoac mo emulator bang lenh (thay Pixel_9 dung ten AVD cua ban):
+       "%LOCALAPPDATA%\Android\Sdk\emulator\emulator.exe" -avd Pixel_9
+
+================================================================================
+  BUILD FAILED (Gradle) — loi "package com.anonymous.massagenow does not exist"
+================================================================================
+  Sau khi doi applicationId sang com.zena.massagenow, file tu sinh
+  android/app/build/generated/.../ReactNativeApplicationEntryPoint.java
+  co the VAN tro toi package CU. Can XOA build cu va generate lai:
+
+       cd android
+       gradlew.bat clean
+       cd ..
+       rmdir /s /q android\app\build
+       npx expo run:android
+
+  Hoac trong project:  npm run android:clean   roi   npx expo run:android
+
+================================================================================
+  BUILD FAILED (Gradle) — chung
+================================================================================
+  Xem dong DO ngay PHIA TREN "BUILD FAILED" de biet loi that.
+  Thu:
+       cd android
+       .\gradlew assembleDebug --stacktrace
+
+================================================================================
+  BUILD LAU / MAY BI DON (da toi uu trong android/gradle.properties)
+================================================================================
+  - Da giam heap Gradle 4GB -> 2GB, gioi han workers=2, chi build 1 ABI.
+  - Neu emulator cua ban la Intel x86 (AVD x86_64) ma app khong chay:
+    mo android/gradle.properties, doi dong reactNativeArchitectures thanh:
+       reactNativeArchitectures=x86_64
+  - Lan build dau LUON lau (CMake, NDK). Lan sau nhanh hon neu dung "gradlew" cache.
+  - Dong Chrome / Android Studio khi build neu RAM < 16GB.
+
+================================================================================

@@ -34,7 +34,6 @@ const TR: Record<OnboardingLanguage, Record<string, string>> = {
     balanceLabel: 'Số dư hiện tại',
     currency: 'đ',
     amountPlaceholder: 'Nhập số tiền (VND)',
-    quickLabel: 'Chọn nhanh',
     methodTitle: 'Phương thức thanh toán',
     payos: 'PayOS - QR Code',
     payosDesc: 'Quét mã QR • Xác nhận tự động',
@@ -76,7 +75,6 @@ const TR: Record<OnboardingLanguage, Record<string, string>> = {
     balanceLabel: 'Current Balance',
     currency: '₫',
     amountPlaceholder: 'Enter amount (VND)',
-    quickLabel: 'Quick select',
     methodTitle: 'Payment Method',
     payos: 'PayOS - QR Code',
     payosDesc: 'Scan QR • Auto-confirmed',
@@ -116,25 +114,23 @@ const TR: Record<OnboardingLanguage, Record<string, string>> = {
 
 // ── Color palette (matches home screen) ──
 const P = {
-  primary: '#2196F3',
-  primaryDark: '#1565C0',
-  primaryLight: '#90CAF9',
-  bg: '#F5F9FF',
+  primary: '#E53935',
+  primaryDark: '#C62828',
+  primaryLight: '#EF5350',
+  bg: '#FFFBFB',
   card: '#FFFFFF',
   text: '#1A1A1A',
-  sub: '#5C85B0',
-  muted: '#C4A0A8',
-  line: '#F0DDE1',
-  accent: '#42A5F5',
-  success: '#2E7D52',
+  sub: '#4B5563',
+  muted: '#9E8585',
+  line: '#E2E8F0',
+  accent: '#E53935',
+  success: '#1E3A5F',
   successBg: '#E8F5E9',
   warn: '#E39A1A',
   warnBg: '#FFF8E1',
-  disabled: '#F3E8EB',
-  disabledText: '#C8AEB8',
+  disabled: '#E0EFED',
+  disabledText: '#9E8585',
 };
-
-const QUICK_AMOUNTS = [50000, 100000, 200000, 500000, 1000000, 2000000];
 
 type MethodKey = 'payos' | 'bank' | 'atm' | 'card';
 
@@ -336,25 +332,6 @@ export default function TherapistTopUpScreen({ onClose }: { onClose?: () => void
               placeholderTextColor={P.muted}
               style={s.amountInput}
             />
-          </View>
-
-          <Text style={s.quickLabel}>{t.quickLabel}</Text>
-          <View style={s.quickRow}>
-            {QUICK_AMOUNTS.map((v) => {
-              const active = numericAmount === v;
-              return (
-                <TouchableOpacity
-                  key={v}
-                  style={[s.quickChip, active && s.quickChipActive]}
-                  onPress={() => setAmount(String(v))}
-                  activeOpacity={0.8}
-                >
-                  <Text style={[s.quickChipText, active && s.quickChipTextActive]}>
-                    {v >= 1000000 ? `${v / 1000000}tr` : `${v / 1000}k`}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
           </View>
         </View>
 
@@ -601,7 +578,7 @@ const s = StyleSheet.create({
     borderRadius: 16,
     padding: 16,
     marginBottom: 16,
-    shadowColor: '#2196F3',
+    shadowColor: '#E53935',
     shadowOpacity: 0.04,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 2 },
@@ -637,40 +614,6 @@ const s = StyleSheet.create({
     fontWeight: '700',
     color: P.text,
     paddingVertical: 14,
-  },
-  quickLabel: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: P.sub,
-    marginTop: 14,
-    marginBottom: 8,
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-  },
-  quickRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  quickChip: {
-    paddingHorizontal: 16,
-    paddingVertical: 9,
-    borderRadius: 20,
-    backgroundColor: P.bg,
-    borderWidth: 1.5,
-    borderColor: P.line,
-  },
-  quickChipActive: {
-    backgroundColor: P.primary,
-    borderColor: P.primary,
-  },
-  quickChipText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: P.text,
-  },
-  quickChipTextActive: {
-    color: '#FFFFFF',
   },
 
   // ── Payment methods ──
@@ -733,7 +676,7 @@ const s = StyleSheet.create({
   recommendText: {
     fontSize: 10,
     fontWeight: '800',
-    color: '#2E7D52',
+    color: '#1E3A5F',
     textTransform: 'uppercase',
   },
   comingSoonBadge: {

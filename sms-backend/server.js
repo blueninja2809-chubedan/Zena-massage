@@ -107,6 +107,21 @@ async function supabaseRpc(fnName, params) {
   return res.json();
 }
 
+async function supabaseRestInsert(table, row) {
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) return false;
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: SUPABASE_SERVICE_KEY,
+      Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+      Prefer: 'return=minimal',
+    },
+    body: JSON.stringify(row),
+  });
+  return res.ok;
+}
+
 app.use(helmet());
 app.use(cors({ origin: FRONTEND_ORIGIN === '*' ? true : FRONTEND_ORIGIN }));
 app.use(express.json({ limit: '1mb' }));
@@ -279,6 +294,24 @@ app.post('/api/payos/create-payment', requireApiKey, async (req, res) => {
       });
     }
 
+    const bookingId = typeof req.body.bookingId === 'string' ? req.body.bookingId.trim() : '';
+    const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    if (bookingId && uuidRe.test(bookingId)) {
+      const inserted = await supabaseRestInsert('payos_booking_orders', {
+        order_code: result.data.orderCode,
+        booking_id: bookingId,
+        user_id: userId,
+        amount: Number(amount),
+      });
+      if (!inserted) {
+        console.error('[PayOS] Failed to register booking order in Supabase');
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to register booking payment',
+        });
+      }
+    }
+
     return res.json({
       success: true,
       data: {
@@ -358,7 +391,22 @@ app.post('/api/payos/webhook', async (req, res) => {
     if (webhookData.success && data.orderCode) {
       console.log(`[PayOS Webhook] Payment ${orderCode} completed: ${amount} VND`);
 
-      // Look up the payment to get userId from buyerName
+      // Service booking via payos_booking_orders — confirm booking, do NOT credit wallet
+      if (SUPABASE_URL && SUPABASE_SERVICE_KEY) {
+        try {
+          const bookingRpc = await supabaseRpc('complete_payos_booking_from_webhook', {
+            p_order_code: Number(orderCode),
+          });
+          if (bookingRpc && bookingRpc.ok === true) {
+            console.log(`[PayOS Webhook] Service booking confirmed for order ${orderCode}`);
+            return res.json({ success: true });
+          }
+        } catch (err) {
+          console.warn('[PayOS Webhook] Booking completion RPC failed:', err.message);
+        }
+      }
+
+      // Wallet top-up (top-up flow only — not linked to payos_booking_orders)
       try {
         const paymentResp = await payosFetch(`${PAYOS_BASE_URL}/v2/payment-requests/${orderCode}`, {
           method: 'GET',

@@ -17,11 +17,11 @@ import {
 } from 'react-native';
 
 const COLORS = {
-  primary: '#2196F3',
+  primary: '#E53935',
   text: '#1A1A1A',
-  lightText: '#5C85B0',
+  lightText: '#4B5563',
   bg: '#F5F5F5',
-  cardBg: '#F5F9FF',
+  cardBg: '#FFFBFB',
   white: '#FFFFFF',
   divider: '#E8E8E8',
   gold: '#FFA000',

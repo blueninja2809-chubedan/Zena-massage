@@ -46,14 +46,14 @@ const translations = {
 };
 
 const COLORS = {
-  primary: '#2196F3',
-  dark: '#1565C0',
-  bg: '#F5F9FF',
+  primary: '#E53935',
+  dark: '#C62828',
+  bg: '#FFFBFB',
   white: '#fff',
   text: '#1A1A1A',
-  subText: '#5C85B0',
-  accent: '#42A5F5',
-  green: '#2D8653',
+  subText: '#4B5563',
+  accent: '#E53935',
+  green: '#C62828',
   greenLight: '#E8F5EE',
   gold: '#F5A623',
   goldLight: '#FFF8E1',
@@ -66,7 +66,7 @@ type PromoTag = { label: string; color: string; bg: string };
 
 function getPromoTag(promo: Promotion, strings: Record<string, string>): PromoTag | null {
   if (promo.discountPercent >= 50) return { label: strings.hotDeal, color: COLORS.orange, bg: COLORS.orangeLight };
-  if (promo.discountPercent >= 30) return { label: strings.limited, color: COLORS.primary, bg: '#E3F2FD' };
+  if (promo.discountPercent >= 30) return { label: strings.limited, color: COLORS.primary, bg: '#FFCDD2' };
   if (promo.code.includes('NEW') || promo.code.includes('INVITE')) return { label: strings.newUser, color: COLORS.green, bg: COLORS.greenLight };
   return null;
 }

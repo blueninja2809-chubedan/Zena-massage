@@ -8,19 +8,19 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import type { UserRole } from '@/contexts/UserContext';
 import { useLanguage } from '@/contexts/LanguageContext';
+import type { UserRole } from '@/contexts/UserContext';
 
 const COLORS = {
-  primary: '#2196F3',
-  primaryDark: '#1565C0',
-  primarySoft: '#F8E9EC',
-  bg: '#FFF8F9',
+  primary: '#E53935',
+  primaryDark: '#C62828',
+  primarySoft: '#FFCDD2',
+  bg: '#FFFBFB',
   card: '#FFFFFF',
-  text: '#3D0D16',
-  muted: '#8E5C66',
-  border: '#B3D4F0',
-  green: '#2D8653',
+  text: '#1A2B2A',
+  muted: '#5E8A83',
+  border: '#D1D9E6',
+  green: '#C62828',
   greenSoft: '#E8F5EE',
 };
 

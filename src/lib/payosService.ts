@@ -65,9 +65,12 @@ export async function createPayOSPayment(
   userId: string,
   amount: number,
   description?: string,
+  bookingId?: string,
 ): Promise<{ success: boolean; data?: PayOSPaymentResult; message?: string }> {
+  const body: Record<string, unknown> = { userId, amount, description };
+  if (bookingId) body.bookingId = bookingId;
   return payosApi<PayOSPaymentResult>('/api/payos/create-payment', {
-    body: { userId, amount, description },
+    body: body as Record<string, unknown>,
   });
 }
 

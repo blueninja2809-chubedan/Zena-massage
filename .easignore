@@ -1,0 +1,47 @@
+# dependencies
+node_modules/
+
+# Expo
+.expo/
+dist/
+web-build/
+
+# Native
+.kotlin/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Metro
+.metro-health-check*
+
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
+.DS_Store
+*.pem
+
+# typescript
+*.tsbuildinfo
+
+app-example
+
+# generated native folders
+/ios
+/android
+
+# other
+dist-export/
+admin-panel/
+sms-backend/
+metro_err.txt
+metro_out.txt
+native_build_full.log
+
+# NOTE: .env is NOT excluded here — EAS needs it for EXPO_PUBLIC_* vars

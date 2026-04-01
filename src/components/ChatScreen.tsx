@@ -45,15 +45,15 @@ const translations = {
 };
 
 const COLORS = {
-  bg: '#F4F6F4',
+  bg: '#FFFBFB',
   text: '#1A1A1A',
   subText: '#6F757B',
   lightText: '#B0B0B0',
-  border: '#F0F0F0',
-  green: '#5F8F47',
-  greenOnline: '#44C767',
-  blue: '#3B82F6',
-  unreadBg: '#F8F9FF',
+  border: '#FFCDD2',
+  green: '#C62828',
+  greenOnline: '#E53935',
+  blue: '#E53935',
+  unreadBg: '#FFCDD2',
 };
 
 export default function ChatScreen({ onClose, bookingId }: { onClose: () => void; bookingId?: string }) {

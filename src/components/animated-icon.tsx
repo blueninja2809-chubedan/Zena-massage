@@ -116,11 +116,11 @@ const splashStyles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: '#90CAF9',
+    backgroundColor: '#EF5350',
   },
   loadingText: {
     fontSize: 14,
-    color: '#90CAF9',
+    color: '#EF5350',
     fontWeight: '500',
   },
 });
@@ -182,7 +182,7 @@ const styles = StyleSheet.create({
   },
   background: {
     borderRadius: 40,
-    backgroundColor: '#2196F3',
+    backgroundColor: '#E53935',
     width: 128,
     height: 128,
     position: 'absolute',

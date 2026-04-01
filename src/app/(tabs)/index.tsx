@@ -6,6 +6,7 @@ import {
     Dimensions,
     FlatList,
     Image,
+    InteractionManager,
     Modal,
     ScrollView,
     StatusBar,
@@ -15,7 +16,7 @@ import {
     TouchableOpacity,
     View
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import ChatScreen from '@/components/ChatScreen';
 import MassageHomeScreen from '@/components/MassageHomeScreen';
@@ -25,12 +26,22 @@ import type { OnboardingLanguage } from '@/components/Onboarding';
 import PromotionsScreen from '@/components/PromotionsScreen';
 import TherapistTopUpScreen from '@/components/TherapistTopUpScreen';
 import WalletScreen from '@/components/WalletScreen';
-import { DEFAULT_CITY, VIETNAM_PROVINCES } from '@/constants/bookingFilters';
+import { DEFAULT_CITY, SERVICE_TYPES, VIETNAM_PROVINCES } from '@/constants/bookingFilters';
 import { useActiveBooking } from '@/contexts/ActiveBookingContext';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { useNotifications } from '@/contexts/NotificationContext';
 import { useUser } from '@/contexts/UserContext';
-import { getNotifications, getOrCreateWallet, getTherapists } from '@/lib/supabaseService';
+import { getOrCreateWallet, getTherapists } from '@/lib/supabaseService';
 import type { Therapist } from '@/lib/types';
+
+const HOME_SERVICE_TAG_EMOJIS = ['🧴', '♨️', '💆', '🌸', '🦶', '💪', '🧴', '🤲', '✨', '🛁', '👂'] as const;
+
+function getHomeServiceTags() {
+  return SERVICE_TYPES.filter((n) => n !== 'Tất cả').map((label, i) => ({
+    emoji: HOME_SERVICE_TAG_EMOJIS[i] ?? '✨',
+    label,
+  }));
+}
 
 const translations: Record<OnboardingLanguage, Record<string, string>> = {
   vi: {
@@ -101,15 +112,15 @@ const translations: Record<OnboardingLanguage, Record<string, string>> = {
   },
 };
 
-// Burgundy-red color palette
+// Chủ đề đỏ tươi (Material Red)
 const COLORS = {
-  primary: '#2196F3',
-  dark: '#1565C0',
-  light: '#90CAF9',
-  bg: '#F5F9FF',
+  primary: '#E53935',
+  dark: '#C62828',
+  light: '#EF5350',
+  bg: '#F8F9FA',
   text: '#1A1A1A',
-  lightText: '#5C85B0',
-  accent: '#42A5F5',
+  lightText: '#5C4A4A',
+  accent: '#C62828',
 };
 
 const supportChannels = [
@@ -122,6 +133,7 @@ const supportChannels = [
 ];
 
 export default function HomeScreen() {
+  const insets = useSafeAreaInsets();
   const { language } = useLanguage();
   const { user, setUser } = useUser();
   const { activeBooking } = useActiveBooking();
@@ -137,7 +149,7 @@ export default function HomeScreen() {
   const [showWallet, setShowWallet] = useState(false);
   const [showCityPicker, setShowCityPicker] = useState(false);
   const [cityQuery, setCityQuery] = useState('');
-  const [unreadNotifCount, setUnreadNotifCount] = useState(0);
+  const { unreadCount: unreadNotifCount, refreshUnreadCount } = useNotifications();
   const [therapists, setTherapists] = useState<Therapist[]>([]);
   const [featuredTherapists, setFeaturedTherapists] = useState<Therapist[]>([]);
   const [loadingFeatured, setLoadingFeatured] = useState(true);
@@ -179,31 +191,29 @@ export default function HomeScreen() {
 
   useEffect(() => { loadWalletBalance(); }, [loadWalletBalance]);
 
-  // Load unread notification count
-  const loadNotifCount = useCallback(() => {
-    const userId = user?.authUid ?? user?.phoneNumber ?? '';
-    if (!userId) return;
-    getNotifications(userId)
-      .then((list) => setUnreadNotifCount(list.filter((n) => !n.isRead).length))
-      .catch(() => {});
-  }, [user?.authUid, user?.phoneNumber]);
 
-  useEffect(() => { loadNotifCount(); }, [loadNotifCount]);
 
-  // Load featured therapists on mount
+  // Load featured therapists after transitions — avoids stacking network work right when tabs appear after login
   useEffect(() => {
-    const loadFeatured = async () => {
-      try {
-        const data = await getTherapists();
-        const sorted = [...data].sort((a, b) => b.rating - a.rating);
-        setFeaturedTherapists(sorted);
-      } catch {
-        setFeaturedTherapists([]);
-      } finally {
-        setLoadingFeatured(false);
-      }
+    let cancelled = false;
+    const task = InteractionManager.runAfterInteractions(() => {
+      (async () => {
+        try {
+          const data = await getTherapists();
+          if (cancelled) return;
+          const sorted = [...data].sort((a, b) => b.rating - a.rating);
+          setFeaturedTherapists(sorted);
+        } catch {
+          if (!cancelled) setFeaturedTherapists([]);
+        } finally {
+          if (!cancelled) setLoadingFeatured(false);
+        }
+      })();
+    });
+    return () => {
+      cancelled = true;
+      task.cancel?.();
     };
-    loadFeatured();
   }, []);
 
   const handleSelectSupport = (channel: typeof supportChannels[0]) => {
@@ -287,11 +297,11 @@ export default function HomeScreen() {
   );
 
   return (
-    <SafeAreaView style={styles.container} edges={["top"]}>
-      <StatusBar barStyle="dark-content" backgroundColor={COLORS.bg} />
+    <SafeAreaView style={styles.container} edges={['bottom']}>
+      <StatusBar barStyle="light-content" backgroundColor={COLORS.primary} translucent />
 
-      <View style={styles.topSection}>
-        {/* Top Header Bar */}
+      {/* Khối đỏ bọc đầu (full-bleed), bo góc đáy — đồng bộ app dịch vụ */}
+      <View style={[styles.heroBlue, { paddingTop: Math.max(insets.top, 10) + 8 }]}>
         <View style={styles.headerBar}>
           <View style={styles.headerLeft}>
             <TouchableOpacity style={styles.avatarPlaceholder} onPress={() => router.push('/account')}>
@@ -318,9 +328,10 @@ export default function HomeScreen() {
             </TouchableOpacity>
           </View>
         </View>
+      </View>
 
-        {/* Balance Section */}
-        {user && (
+      {user ? (
+        <View style={styles.balanceOuter}>
           <View style={styles.balanceSection}>
             <View style={styles.balanceLeft}>
               <TouchableOpacity style={styles.balanceLabelRow} onPress={() => setShowWallet(true)}>
@@ -335,8 +346,8 @@ export default function HomeScreen() {
               <Text style={styles.topUpText}>{strings.topUp}</Text>
             </TouchableOpacity>
           </View>
-        )}
-      </View>
+        </View>
+      ) : null}
 
       <ScrollView
         contentContainerStyle={styles.scrollContent}
@@ -367,7 +378,7 @@ export default function HomeScreen() {
           {/* Large card — Massage tại nhà */}
           <TouchableOpacity style={styles.gridCardLarge} activeOpacity={0.85} onPress={() => setShowMassageHome(true)}>
             <Image
-              source={require('../../assets/images/massage-home-banner.png')}
+              source={require('@/assets/images/massage-home-banner.png')}
               style={{ width: '100%', height: '100%' }}
               resizeMode="cover"
             />
@@ -377,7 +388,7 @@ export default function HomeScreen() {
           <View style={styles.gridColRight}>
             <TouchableOpacity style={styles.gridCardSmallImg} activeOpacity={0.85} onPress={() => setShowMassageLocation(true)}>
               <Image
-                source={require('../../assets/images/promo-location-banner.png')}
+                source={require('@/assets/images/promo-location-banner.png')}
                 style={{ width: '100%', height: '100%' }}
                 resizeMode="cover"
               />
@@ -398,20 +409,8 @@ export default function HomeScreen() {
 
         {/* Quick service tags */}
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tagsRow} contentContainerStyle={styles.tagsContent}>
-          {[
-            { emoji: '🧴', label: 'Massage Dầu + Giác Hơi' },
-            { emoji: '🪨', label: 'Massage Đá Nóng' },
-            { emoji: '💆', label: 'Massage Thái' },
-            { emoji: '🌸', label: 'Massage Aroma' },
-            { emoji: '🦶', label: 'Massage Chân' },
-            { emoji: '💪', label: 'Massage Cổ Vai Gáy' },
-            { emoji: '🧖', label: 'Massage Dầu' },
-            { emoji: '🤲', label: 'Massage Không Dầu' },
-            { emoji: '✨', label: 'Wax Bikini' },
-            { emoji: '🧽', label: 'Tắm tẩy tế bào chết toàn thân Hàn Quốc' },
-            { emoji: '👂', label: 'Lấy ráy tai' },
-          ].map((tag) => (
-            <TouchableOpacity key={tag.label} style={styles.tagChip} activeOpacity={0.7} onPress={() => setShowMassageHome(true)}>
+          {getHomeServiceTags().map((tag) => (
+            <TouchableOpacity key={tag.label} style={styles.tagChip} activeOpacity={1} onPress={() => setShowMassageHome(true)}>
               <Text style={styles.tagEmoji}>{tag.emoji}</Text>
               <Text style={styles.tagLabel}>{tag.label}</Text>
             </TouchableOpacity>
@@ -477,7 +476,7 @@ export default function HomeScreen() {
       {/* Support Button */}
       <TouchableOpacity
         style={styles.supportButton}
-        activeOpacity={0.85}
+        activeOpacity={1}
         onPress={() => setShowSupportModal(true)}
       >
         <Text style={styles.supportButtonIcon}>💬</Text>
@@ -505,7 +504,7 @@ export default function HomeScreen() {
                 >
                   <View style={[styles.supportIconBox, { backgroundColor: item.color }]}>
                     {item.iconType === 'zalo' ? (
-                      <Image source={require('../../assets/images/zalo-logo.png')} style={{ width: 36, height: 36 }} resizeMode="contain" />
+                      <Image source={require('@/assets/images/zalo-logo.png')} style={{ width: 36, height: 36 }} resizeMode="contain" />
                     ) : item.iconType === 'fa5' ? (
                       <FontAwesome5 name={item.iconName} size={22} color="#fff" />
                     ) : (
@@ -609,7 +608,7 @@ export default function HomeScreen() {
 
       {/* Notification screen */}
       <Modal visible={showNotifications} animationType="slide" onRequestClose={() => setShowNotifications(false)}>
-        <NotificationScreen onClose={() => { setShowNotifications(false); loadNotifCount(); }} />
+        <NotificationScreen onClose={() => { setShowNotifications(false); refreshUnreadCount(); }} />
       </Modal>
 
       {/* Chat screen */}
@@ -653,11 +652,21 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.bg,
   },
 
-  topSection: {
+  heroBlue: {
+    backgroundColor: COLORS.primary,
+    borderBottomLeftRadius: 28,
+    borderBottomRightRadius: 28,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(255,255,255,0.38)',
     paddingHorizontal: 16,
-    paddingTop: 10,
-    paddingBottom: 16,
-    backgroundColor: COLORS.bg,
+    paddingBottom: 18,
+    overflow: 'hidden',
+  },
+
+  balanceOuter: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    marginBottom: 4,
   },
 
   // --- Header Bar ---
@@ -665,7 +674,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingBottom: 12,
   },
   headerLeft: {
     flexDirection: 'row',
@@ -676,7 +684,7 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: '#EDE0E2',
+    backgroundColor: 'rgba(255,255,255,0.22)',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -691,11 +699,11 @@ const styles = StyleSheet.create({
   locationText: {
     fontSize: 16,
     fontWeight: '700',
-    color: COLORS.text,
+    color: '#FFFFFF',
   },
   locationArrow: {
     fontSize: 14,
-    color: COLORS.lightText,
+    color: 'rgba(255,255,255,0.88)',
   },
   headerRight: {
     flexDirection: 'row',
@@ -703,10 +711,11 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   headerIconBtn: {
+    position: 'relative',
     width: 38,
     height: 38,
     borderRadius: 19,
-    backgroundColor: '#EDE0E2',
+    backgroundColor: 'rgba(255,255,255,0.22)',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -742,13 +751,8 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: '#F0E4E6',
+    borderColor: '#E8B4B8',
     borderRadius: 20,
-    shadowColor: '#3B0D14',
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 2,
   },
   balanceLeft: {
     flex: 1,
@@ -824,11 +828,6 @@ const styles = StyleSheet.create({
     flex: 1,
     borderRadius: 18,
     overflow: 'hidden',
-    shadowColor: '#3B0D14',
-    shadowOpacity: 0.12,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 5,
   },
   gridColRight: {
     width: (Dimensions.get('window').width - 44) * 0.42,
@@ -838,21 +837,11 @@ const styles = StyleSheet.create({
     flex: 1,
     borderRadius: 16,
     overflow: 'hidden',
-    shadowColor: '#3B0D14',
-    shadowOpacity: 0.10,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 4,
   },
   gridCardSmallImg: {
     borderRadius: 16,
     overflow: 'hidden',
     aspectRatio: 960 / 600,
-    shadowColor: '#3B0D14',
-    shadowOpacity: 0.10,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 4,
   },
   gridCardBg: {
     flex: 1,
@@ -932,12 +921,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: '#F0E4E6',
-    shadowColor: '#3B0D14',
-    shadowOpacity: 0.04,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 1,
+    borderColor: '#E8B4B8',
   },
   tagEmoji: {
     fontSize: 16,
@@ -968,12 +952,7 @@ const styles = StyleSheet.create({
     padding: 14,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#F0E4E6',
-    shadowColor: '#3B0D14',
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 3,
+    borderColor: '#E8B4B8',
   },
   featuredAvatarWrap: {
     position: 'relative',
@@ -983,7 +962,7 @@ const styles = StyleSheet.create({
     width: 60,
     height: 60,
     borderRadius: 30,
-    backgroundColor: '#F3E4E6',
+    backgroundColor: '#FFEBEE',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1060,11 +1039,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderRadius: 24,
-    shadowColor: '#3B0D14',
-    shadowOpacity: 0.15,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 6,
   },
   supportButtonIcon: {
     fontSize: 18,
@@ -1105,7 +1079,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F2EBED',
+    backgroundColor: '#FFF0F0',
     borderRadius: 16,
     paddingHorizontal: 10,
     gap: 8,
@@ -1131,13 +1105,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#EFE3E6',
-    backgroundColor: '#FFF7F9',
+    borderColor: '#E8B4B8',
+    backgroundColor: '#FFF5F5',
     marginBottom: 8,
   },
   cityItemActive: {
-    backgroundColor: '#2196F3',
-    borderColor: '#2196F3',
+    backgroundColor: '#E53935',
+    borderColor: '#E53935',
   },
   cityItemText: {
     fontSize: 14,
@@ -1223,13 +1197,13 @@ const styles = StyleSheet.create({
   therapistCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F5F9FF',
+    backgroundColor: '#FFFBFB',
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: '#F0E4E6',
+    borderColor: '#E8B4B8',
     padding: 14,
     marginBottom: 12,
-    shadowColor: '#3B0D14',
+    shadowColor: '#0A2540',
     shadowOpacity: 0.05,
     shadowRadius: 6,
     shadowOffset: { width: 0, height: 2 },
@@ -1239,7 +1213,7 @@ const styles = StyleSheet.create({
     width: 56,
     height: 56,
     borderRadius: 28,
-    backgroundColor: '#F3E4E6',
+    backgroundColor: '#FFEBEE',
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 12,
@@ -1270,7 +1244,7 @@ const styles = StyleSheet.create({
   availableBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#EEF8F1',
+    backgroundColor: '#FFCDD2',
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderRadius: 12,
@@ -1280,12 +1254,12 @@ const styles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: '#2D8653',
+    backgroundColor: '#C62828',
   },
   availableText: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#2D8653',
+    color: '#C62828',
   },
   therapistPrice: {
     fontSize: 13,
@@ -1359,13 +1333,13 @@ const styles = StyleSheet.create({
   connectedStatus: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#2D8653',
+    color: '#C62828',
   },
   connectedMsgBtn: {
     width: 38,
     height: 38,
     borderRadius: 19,
-    backgroundColor: '#E8F5EE',
+    backgroundColor: '#FFCDD2',
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 8,

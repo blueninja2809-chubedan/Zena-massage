@@ -2,7 +2,7 @@ import AdminChatPanel from '@/components/AdminChatPanel';
 import { SignInScreen } from '@/components/SignInScreen';
 import { SignUpScreen } from '@/components/SignUpScreen';
 import VipMembershipScreen from '@/components/VipMembershipScreen';
-import { SERVICE_TYPES } from '@/constants/bookingFilters';
+import { SERVICE_TYPES, VIETNAM_PROVINCES } from '@/constants/bookingFilters';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { UserData, useUser } from '@/contexts/UserContext';
 import { checkTherapistMinBalance, createPartnerApplication, getTherapistAvailability, updateTherapistAvailability } from '@/lib/supabaseService';
@@ -26,9 +26,9 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 const COLORS = {
-  primary: '#2196F3',
-  primaryDark: '#1565C0',
-  primaryLight: '#E3F2FD',
+  primary: '#E53935',
+  primaryDark: '#C62828',
+  primaryLight: '#FFCDD2',
   gold: '#F5A623',
   goldLight: '#FFF8E1',
   bg: '#F5F5F5',
@@ -39,71 +39,7 @@ const COLORS = {
   red: '#E53935',
 };
 
-const VN_PROVINCES = [
-  'Hà Nội',
-  'TP. Hồ Chí Minh',
-  'Hải Phòng',
-  'Đà Nẵng',
-  'Cần Thơ',
-  'An Giang',
-  'Bà Rịa - Vũng Tàu',
-  'Bắc Giang',
-  'Bắc Kạn',
-  'Bạc Liêu',
-  'Bắc Ninh',
-  'Bến Tre',
-  'Bình Định',
-  'Bình Dương',
-  'Bình Phước',
-  'Bình Thuận',
-  'Cà Mau',
-  'Cao Bằng',
-  'Đắk Lắk',
-  'Đắk Nông',
-  'Điện Biên',
-  'Đồng Nai',
-  'Đồng Tháp',
-  'Gia Lai',
-  'Hà Giang',
-  'Hà Nam',
-  'Hà Tĩnh',
-  'Hải Dương',
-  'Hậu Giang',
-  'Hòa Bình',
-  'Hưng Yên',
-  'Khánh Hòa',
-  'Kiên Giang',
-  'Kon Tum',
-  'Lai Châu',
-  'Lâm Đồng',
-  'Lạng Sơn',
-  'Lào Cai',
-  'Long An',
-  'Nam Định',
-  'Nghệ An',
-  'Ninh Bình',
-  'Ninh Thuận',
-  'Phú Thọ',
-  'Phú Yên',
-  'Quảng Bình',
-  'Quảng Nam',
-  'Quảng Ngãi',
-  'Quảng Ninh',
-  'Quảng Trị',
-  'Sóc Trăng',
-  'Sơn La',
-  'Tây Ninh',
-  'Thái Bình',
-  'Thái Nguyên',
-  'Thanh Hóa',
-  'Thừa Thiên Huế',
-  'Tiền Giang',
-  'Trà Vinh',
-  'Tuyên Quang',
-  'Vĩnh Long',
-  'Vĩnh Phúc',
-  'Yên Bái',
-];
+const VN_PROVINCES = VIETNAM_PROVINCES.map((p) => (p === 'TP.HCM' ? 'TP. Hồ Chí Minh' : p));
 
 const THERAPIST_SERVICE_OPTIONS = SERVICE_TYPES.filter((name) => name !== 'Tất cả');
 
@@ -176,7 +112,7 @@ export default function AccountScreen() {
   const [currentScreen, setCurrentScreen] = useState<
     'account' | 'signin' | 'signup' | 'profile' | 'therapistSetup' | 'vipMembership' | 'partnerSignupType' | 'partnerBusinessSignup' | 'adminChat'
   >('account');
-  const [country] = useState({ code: 'VN', label: 'Việt Nam', flag: '🇻🇳' });
+  const [country] = useState({ code: 'VN', label: 'Việt Nam', flag: '\uD83C\uDDFB\uD83C\uDDF3' });
   const [profileVisible, setProfileVisible] = useState(true);
 
   useEffect(() => {
@@ -190,7 +126,7 @@ export default function AccountScreen() {
   const handleToggleProfileVisible = async (value: boolean) => {
     if (!user?.authUid) return;
 
-    // If turning ON, check minimum balance (500,000đ)
+    // If turning ON, check minimum balance (500.000đ)
     if (value) {
       try {
         const hasMinBalance = await checkTherapistMinBalance(user.authUid, 500000);
@@ -295,7 +231,7 @@ export default function AccountScreen() {
   const rewardPromoCard = (
     <TouchableOpacity style={s.promoRewardCard} activeOpacity={0.85}>
       <Image
-        source={require('../../assets/images/promo-reward-banner.png')}
+        source={require('@/assets/images/promo-reward-banner.png')}
         style={s.promoRewardBannerImg}
         resizeMode="cover"
       />
@@ -305,7 +241,7 @@ export default function AccountScreen() {
   const partnerPromoCard = user?.role === 'therapist' ? (
     <TouchableOpacity style={s.promoRewardCard} activeOpacity={0.85} onPress={() => setCurrentScreen('therapistSetup')}>
       <Image
-        source={require('../../assets/images/ktv2.png')}
+        source={require('@/assets/images/ktv2.png')}
         style={s.promoRewardBannerImg}
         resizeMode="cover"
       />
@@ -313,7 +249,7 @@ export default function AccountScreen() {
   ) : (
     <TouchableOpacity style={s.promoRewardCard} activeOpacity={0.85} onPress={() => setCurrentScreen('partnerSignupType')}>
       <Image
-        source={require('../../assets/images/promo-partner-banner.png')}
+        source={require('@/assets/images/promo-partner-banner.png')}
         style={s.promoRewardBannerImg}
         resizeMode="cover"
       />
@@ -447,7 +383,7 @@ function PartnerSignupTypeScreen({
 
   return (
     <SafeAreaView style={s.partnerContainer} edges={['top']}>
-      <StatusBar barStyle="dark-content" backgroundColor="#FFF7FA" />
+      <StatusBar barStyle="dark-content" backgroundColor="#F8FAFC" />
 
       <View style={s.partnerHeader}>
         <TouchableOpacity style={s.backButton} onPress={onBack} activeOpacity={0.8}>
@@ -559,7 +495,7 @@ function BusinessPartnerSignupScreen({
         isEn ? 'Sign in required' : 'Cần đăng nhập',
         isEn
           ? 'Please sign in before submitting partner registration.'
-          : 'Vui lòng đăng nhập trước khi gửi đăng ký đối tác.',
+          : 'Vui lòng đăng ký trước khi gửi đăng ký đối tác.',
       );
       return;
     }
@@ -619,7 +555,7 @@ function BusinessPartnerSignupScreen({
 
   return (
     <SafeAreaView style={s.partnerContainer} edges={['top']}>
-      <StatusBar barStyle="dark-content" backgroundColor="#FFF7FA" />
+      <StatusBar barStyle="dark-content" backgroundColor="#F8FAFC" />
       <View style={s.partnerHeader}>
         <TouchableOpacity style={s.backButton} onPress={onBack} activeOpacity={0.8}>
           <Text style={s.backButtonText}>←</Text>
@@ -672,7 +608,7 @@ function BusinessPartnerSignupScreen({
         <TextInput
           style={s.businessInput}
           placeholder={isEn ? 'Enter branch name' : 'Nhập tên chi nhánh'}
-          placeholderTextColor="#B59CA5"
+          placeholderTextColor="#9E8585"
           value={branchName}
           onChangeText={setBranchName}
         />
@@ -681,7 +617,7 @@ function BusinessPartnerSignupScreen({
         <TextInput
           style={s.businessInput}
           placeholder={isEn ? 'Enter branch address' : 'Nhập địa chỉ chi nhánh'}
-          placeholderTextColor="#B59CA5"
+          placeholderTextColor="#9E8585"
           value={branchAddress}
           onChangeText={setBranchAddress}
         />
@@ -701,7 +637,7 @@ function BusinessPartnerSignupScreen({
           <TextInput
             style={s.businessTimeInput}
             placeholder="08:00"
-            placeholderTextColor="#B59CA5"
+            placeholderTextColor="#9E8585"
             value={weekdayStart}
             onChangeText={setWeekdayStart}
           />
@@ -709,7 +645,7 @@ function BusinessPartnerSignupScreen({
           <TextInput
             style={s.businessTimeInput}
             placeholder="22:00"
-            placeholderTextColor="#B59CA5"
+            placeholderTextColor="#9E8585"
             value={weekdayEnd}
             onChangeText={setWeekdayEnd}
           />
@@ -720,7 +656,7 @@ function BusinessPartnerSignupScreen({
           <TextInput
             style={s.businessTimeInput}
             placeholder="09:00"
-            placeholderTextColor="#B59CA5"
+            placeholderTextColor="#9E8585"
             value={weekendStart}
             onChangeText={setWeekendStart}
           />
@@ -728,7 +664,7 @@ function BusinessPartnerSignupScreen({
           <TextInput
             style={s.businessTimeInput}
             placeholder="21:00"
-            placeholderTextColor="#B59CA5"
+            placeholderTextColor="#9E8585"
             value={weekendEnd}
             onChangeText={setWeekendEnd}
           />
@@ -761,7 +697,7 @@ function BusinessPartnerSignupScreen({
               value={cityQuery}
               onChangeText={setCityQuery}
               placeholder={isEn ? 'Search province/city...' : 'Tìm tỉnh/thành...'}
-              placeholderTextColor="#B59CA5"
+              placeholderTextColor="#9E8585"
             />
 
             <FlatList
@@ -1106,7 +1042,7 @@ function TherapistSetupScreen({
 
   return (
     <SafeAreaView style={s.partnerContainer} edges={['top']}>
-      <StatusBar barStyle="dark-content" backgroundColor="#FFF7FA" />
+      <StatusBar barStyle="dark-content" backgroundColor="#F8FAFC" />
 
       <View style={s.partnerHeader}>
         <TouchableOpacity style={s.backButton} onPress={onBack} activeOpacity={0.7}>
@@ -1157,7 +1093,7 @@ function TherapistSetupScreen({
           value={displayName}
           onChangeText={setDisplayName}
           placeholder="Nhập tên hiển thị"
-          placeholderTextColor="#B59CA5"
+          placeholderTextColor="#9E8585"
           style={s.businessInput}
         />
 
@@ -1245,7 +1181,7 @@ function TherapistSetupScreen({
               value={cityQuery}
               onChangeText={setCityQuery}
               placeholder="Tìm tỉnh/thành..."
-              placeholderTextColor="#B59CA5"
+              placeholderTextColor="#9E8585"
             />
 
             <FlatList
@@ -1335,7 +1271,7 @@ function getInitials(value: string) {
 }
 
 const s = StyleSheet.create({
-  partnerContainer: { flex: 1, backgroundColor: '#FFF7FA' },
+  partnerContainer: { flex: 1, backgroundColor: '#F8FAFC' },
   partnerHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1348,14 +1284,14 @@ const s = StyleSheet.create({
     fontSize: 34,
     lineHeight: 40,
     fontWeight: '800',
-    color: '#2A0C16',
+    color: '#0A2540',
     marginBottom: 18,
     letterSpacing: -0.5,
   },
   partnerOptionCard: {
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: '#BBDEFB',
+    borderColor: '#D1D9E6',
     borderRadius: 18,
     paddingHorizontal: 16,
     paddingVertical: 16,
@@ -1363,35 +1299,35 @@ const s = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    shadowColor: '#7A1230',
+    shadowColor: '#C62828',
     shadowOpacity: 0.05,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 2 },
     elevation: 1,
   },
   partnerOptionTextWrap: { flex: 1, gap: 6 },
-  partnerOptionTitle: { fontSize: 22, lineHeight: 28, fontWeight: '800', color: '#2A0C16' },
-  partnerOptionDesc: { fontSize: 15, lineHeight: 22, color: '#7E5865', fontWeight: '500' },
+  partnerOptionTitle: { fontSize: 22, lineHeight: 28, fontWeight: '800', color: '#0A2540' },
+  partnerOptionDesc: { fontSize: 15, lineHeight: 22, color: '#7D5E5E', fontWeight: '500' },
   partnerOptionIconWrap: {
     width: 52,
     height: 52,
     borderRadius: 16,
-    backgroundColor: '#FFEAF1',
+    backgroundColor: '#FFCDD2',
     alignItems: 'center',
     justifyContent: 'center',
   },
   partnerOptionIcon: { fontSize: 26 },
-  businessHeaderTitle: { fontSize: 22, fontWeight: '800', color: '#2A0C16' },
+  businessHeaderTitle: { fontSize: 22, fontWeight: '800', color: '#0A2540' },
   businessContent: { paddingHorizontal: 16, paddingBottom: 36 },
-  businessLabel: { marginTop: 10, marginBottom: 8, color: '#2A0C16', fontSize: 18, fontWeight: '700' },
-  requiredStar: { color: '#E33A57', fontSize: 16, fontWeight: '800' },
+  businessLabel: { marginTop: 10, marginBottom: 8, color: '#0A2540', fontSize: 18, fontWeight: '700' },
+  requiredStar: { color: '#E53935', fontSize: 16, fontWeight: '800' },
   businessImageGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   businessImageSlot: {
     width: '31.5%',
     aspectRatio: 1,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#F0D8E0',
+    borderColor: '#D1D9E6',
     backgroundColor: '#FFF',
     alignItems: 'center',
     justifyContent: 'center',
@@ -1400,7 +1336,7 @@ const s = StyleSheet.create({
   },
   businessImage: { width: '100%', height: '100%' },
   businessImagePlaceholderIcon: { fontSize: 24, opacity: 0.35 },
-  businessImagePlaceholderText: { marginTop: 4, fontSize: 12, color: '#B59CA5', fontWeight: '600' },
+  businessImagePlaceholderText: { marginTop: 4, fontSize: 12, color: '#9E8585', fontWeight: '600' },
   businessPlusBadge: {
     position: 'absolute',
     right: 6,
@@ -1408,7 +1344,7 @@ const s = StyleSheet.create({
     width: 24,
     height: 24,
     borderRadius: 12,
-    backgroundColor: '#DE3A56',
+    backgroundColor: '#C62828',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1424,22 +1360,22 @@ const s = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  businessRemoveText: { color: '#6B5059', fontSize: 15, fontWeight: '800' },
+  businessRemoveText: { color: '#4B5563', fontSize: 15, fontWeight: '800' },
   businessWarning: { color: '#1976D2', fontSize: 13, marginTop: 10, fontWeight: '600' },
   businessInput: {
     backgroundColor: '#FFF',
     borderWidth: 1,
-    borderColor: '#F0D8E0',
+    borderColor: '#D1D9E6',
     borderRadius: 12,
     paddingHorizontal: 14,
     paddingVertical: 13,
     fontSize: 16,
-    color: '#2A0C16',
+    color: '#0A2540',
   },
   businessSelect: {
     backgroundColor: '#FFF',
     borderWidth: 1,
-    borderColor: '#F0D8E0',
+    borderColor: '#D1D9E6',
     borderRadius: 12,
     paddingHorizontal: 14,
     paddingVertical: 13,
@@ -1447,9 +1383,9 @@ const s = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-  businessSelectText: { fontSize: 16, color: '#2A0C16', fontWeight: '600' },
-  businessSelectPlaceholder: { color: '#B59CA5', fontWeight: '500' },
-  businessSelectArrow: { fontSize: 14, color: '#8E7480' },
+  businessSelectText: { fontSize: 16, color: '#0A2540', fontWeight: '600' },
+  businessSelectPlaceholder: { color: '#9E8585', fontWeight: '500' },
+  businessSelectArrow: { fontSize: 14, color: '#8B6B6B' },
   businessCityWrap: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -1457,7 +1393,7 @@ const s = StyleSheet.create({
   },
   businessCityChip: {
     borderWidth: 1,
-    borderColor: '#F0D8E0',
+    borderColor: '#D1D9E6',
     backgroundColor: '#FFF',
     borderRadius: 999,
     paddingHorizontal: 12,
@@ -1465,12 +1401,12 @@ const s = StyleSheet.create({
   },
   businessCityChipActive: {
     borderColor: COLORS.primary,
-    backgroundColor: '#FFE8EE',
+    backgroundColor: '#FFCDD2',
   },
   businessCityChipText: {
     fontSize: 13,
     fontWeight: '700',
-    color: '#7A5D68',
+    color: '#7D5E5E',
   },
   businessCityChipTextActive: {
     color: COLORS.primary,
@@ -1495,17 +1431,17 @@ const s = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 10,
   },
-  cityModalTitle: { fontSize: 18, fontWeight: '800', color: '#2A0C16' },
-  cityModalClose: { fontSize: 18, color: '#8E7480', fontWeight: '700' },
+  cityModalTitle: { fontSize: 18, fontWeight: '800', color: '#0A2540' },
+  cityModalClose: { fontSize: 18, color: '#8B6B6B', fontWeight: '700' },
   citySearchInput: {
-    backgroundColor: '#FFF7FA',
+    backgroundColor: '#F8FAFC',
     borderWidth: 1,
-    borderColor: '#F0D8E0',
+    borderColor: '#D1D9E6',
     borderRadius: 12,
     paddingHorizontal: 12,
     paddingVertical: 10,
     fontSize: 15,
-    color: '#2A0C16',
+    color: '#0A2540',
     marginBottom: 10,
   },
   cityOptionRow: {
@@ -1521,7 +1457,7 @@ const s = StyleSheet.create({
     backgroundColor: '#FFF',
   },
   cityOptionRowActive: {
-    backgroundColor: '#FFE8EE',
+    backgroundColor: '#FFCDD2',
     borderColor: COLORS.primary,
   },
   cityOptionText: { fontSize: 15, color: '#4B2A35', fontWeight: '600' },
@@ -1534,20 +1470,20 @@ const s = StyleSheet.create({
     flex: 1,
     backgroundColor: '#FFF',
     borderWidth: 1,
-    borderColor: '#F0D8E0',
+    borderColor: '#D1D9E6',
     borderRadius: 10,
     paddingHorizontal: 10,
     paddingVertical: 10,
     textAlign: 'center',
-    color: '#2A0C16',
+    color: '#0A2540',
     fontSize: 14,
     fontWeight: '600',
   },
-  businessTimeDash: { color: '#8E7480', fontSize: 16, fontWeight: '700' },
+  businessTimeDash: { color: '#8B6B6B', fontSize: 16, fontWeight: '700' },
   businessSaveBtn: {
     marginTop: 20,
     borderRadius: 14,
-    backgroundColor: '#DE3A56',
+    backgroundColor: '#C62828',
     alignItems: 'center',
     paddingVertical: 14,
     marginBottom: 20,
@@ -2051,7 +1987,7 @@ const s = StyleSheet.create({
     width: 92,
     height: 92,
     borderRadius: 46,
-    backgroundColor: '#E3F2FD',
+    backgroundColor: '#FFCDD2',
     alignItems: 'center',
     justifyContent: 'center',
   },

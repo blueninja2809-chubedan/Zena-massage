@@ -1,13 +1,12 @@
-import ChatScreen from '@/components/ChatScreen';
-import { useActiveBooking } from '@/contexts/ActiveBookingContext';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { useUser } from '@/contexts/UserContext';
 import { getServices, getTherapists } from '@/lib/supabaseService';
 import type { Service, Therapist } from '@/lib/types';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
     ActivityIndicator,
-    Animated,
+    Alert,
     Dimensions,
     FlatList,
     Image,
@@ -124,7 +123,7 @@ const translations = {
 };
 
 const COLORS = {
-  green: '#2D8653',
+  green: '#C62828',
   greenLight: '#E8F5EE',
   bg: '#F5F5F5',
   white: '#fff',
@@ -142,6 +141,7 @@ interface LocationService {
   photos: string[];
   rating: number;
   distance: number;
+  duration: number;
   price: number;
   tags: string[];
   description: string;
@@ -181,6 +181,7 @@ function toLocationService(item: Service): LocationService {
     photos: item.image ? [item.image] : [],
     rating: item.rating ?? 5,
     distance: 2 + Math.floor(Math.random() * 8),
+    duration: item.duration ?? 60,
     price: item.basePrice ?? 0,
     tags: [],
     description: item.description || '',
@@ -419,7 +420,6 @@ export default function MassageLocationScreen({ onClose }: { onClose?: () => voi
         <ServiceDetailModal
           service={selectedService}
           strings={strings}
-          therapists={nearbyTherapists}
           onClose={() => setSelectedService(null)}
         />
       )}
@@ -431,16 +431,15 @@ export default function MassageLocationScreen({ onClose }: { onClose?: () => voi
 function ServiceDetailModal({
   service,
   strings,
-  therapists,
   onClose,
 }: {
   service: LocationService;
   strings: Record<string, string>;
-  therapists: NearbyTherapist[];
   onClose: () => void;
 }) {
+  const router = useRouter();
+  const { user } = useUser();
   const [activePhoto, setActivePhoto] = useState(0);
-  const [showBookingSearch, setShowBookingSearch] = useState(false);
   const flatListRef = useRef<FlatList>(null);
 
   const photos = service.photos.length > 0 ? service.photos : [service.image];
@@ -642,585 +641,49 @@ function ServiceDetailModal({
             <Text style={detailStyles.contactIcon}>📞</Text>
             <Text style={detailStyles.contactText}>{strings.contact}</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={detailStyles.bookNowBtn} onPress={() => setShowBookingSearch(true)}>
+          <TouchableOpacity
+            style={detailStyles.bookNowBtn}
+            onPress={() => {
+              if (!user?.authUid) {
+                Alert.alert(
+                  'Đăng nhập',
+                  'Vui lòng đăng nhập để đặt lịch dịch vụ.',
+                  [
+                    { text: 'Huỷ', style: 'cancel' },
+                    {
+                      text: 'Đăng nhập',
+                      onPress: () => {
+                        onClose();
+                        router.push('/(tabs)/account');
+                      },
+                    },
+                  ],
+                );
+                return;
+              }
+              onClose();
+              router.push({
+                pathname: '/service-booking',
+                params: {
+                  serviceId: service.id,
+                  name: encodeURIComponent(service.name),
+                  price: String(service.price),
+                  duration: String(service.duration),
+                  distance: String(service.distance),
+                  rating: String(service.rating),
+                  image: encodeURIComponent(service.image),
+                  address: encodeURIComponent(service.address),
+                },
+              });
+            }}
+          >
             <Text style={detailStyles.bookNowText}>{strings.bookNow}</Text>
           </TouchableOpacity>
         </View>
       </View>
-
-      {/* Booking Search Screen */}
-      {showBookingSearch && (
-        <BookingSearchScreen
-          service={service}
-          strings={strings}
-          therapists={therapists}
-          onClose={() => setShowBookingSearch(false)}
-        />
-      )}
     </Modal>
   );
 }
-
-// ─── Booking Search Screen ──────────────────────────────────
-function BookingSearchScreen({
-  service,
-  strings,
-  therapists,
-  onClose,
-}: {
-  service: LocationService;
-  strings: Record<string, string>;
-  therapists: NearbyTherapist[];
-  onClose: () => void;
-}) {
-  const { setActiveBooking } = useActiveBooking();
-  const [countdown, setCountdown] = useState(12 * 60); // 12 minutes in seconds
-  const [showPopup, setShowPopup] = useState(false);
-  const [showConnectedChat, setShowConnectedChat] = useState(false);
-  const [assignedRejected, setAssignedRejected] = useState(false);
-  const pulseAnim = useRef(new Animated.Value(1)).current;
-  const dotAnims = useRef([
-    new Animated.Value(0),
-    new Animated.Value(0),
-    new Animated.Value(0),
-  ]).current;
-
-  // Countdown timer
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setCountdown((prev) => {
-        if (prev <= 0) {
-          clearInterval(timer);
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-    return () => clearInterval(timer);
-  }, []);
-
-  // Pulse animation for scanning
-  useEffect(() => {
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulseAnim, {
-          toValue: 1.3,
-          duration: 1200,
-          useNativeDriver: true,
-        }),
-        Animated.timing(pulseAnim, {
-          toValue: 1,
-          duration: 1200,
-          useNativeDriver: true,
-        }),
-      ])
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [pulseAnim]);
-
-  // Loading dots animation
-  useEffect(() => {
-    const animations = dotAnims.map((anim, i) =>
-      Animated.loop(
-        Animated.sequence([
-          Animated.delay(i * 300),
-          Animated.timing(anim, { toValue: 1, duration: 400, useNativeDriver: true }),
-          Animated.timing(anim, { toValue: 0, duration: 400, useNativeDriver: true }),
-        ])
-      )
-    );
-    animations.forEach((a) => a.start());
-    return () => animations.forEach((a) => a.stop());
-  }, [dotAnims]);
-
-  const formatTime = useCallback((seconds: number) => {
-    const m = Math.floor(seconds / 60);
-    const s = seconds % 60;
-    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-  }, []);
-
-  const suggestedTherapists = therapists;
-  const assignedTherapist = suggestedTherapists[0] ?? null;
-
-  const handleTherapistConfirmed = useCallback((therapist: NearbyTherapist) => {
-    setActiveBooking({
-      therapist: {
-        id: therapist.id,
-        name: therapist.name,
-        avatar: therapist.avatar,
-        rating: therapist.rating,
-        reviewCount: therapist.reviewCount,
-        distance: therapist.distance,
-      },
-      services: [
-        {
-          name: service.name,
-          duration: 60,
-          price: service.price,
-        },
-      ],
-      totalPrice: service.price,
-      paymentMethod: 'cash',
-      connectedAt: new Date(),
-    });
-    setShowPopup(false);
-    setShowConnectedChat(true);
-  }, [service.name, service.price, setActiveBooking]);
-
-  // Demo simulation:
-  // - 40% assigned therapist accepts instantly and opens connected chat
-  // - 60% assigned therapist rejects and keeps waiting screen for choosing another therapist
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      if (!assignedTherapist) {
-        return;
-      }
-      const acceptInstantly = Math.random() < 0.4;
-      if (acceptInstantly) {
-        handleTherapistConfirmed(assignedTherapist);
-      } else {
-        setAssignedRejected(true);
-      }
-    }, 2500);
-    return () => clearTimeout(timer);
-  }, [assignedTherapist, handleTherapistConfirmed]);
-
-  // Show the "no wait" popup only after the assigned therapist rejects.
-  useEffect(() => {
-    if (!assignedRejected) return;
-    const timer = setTimeout(() => setShowPopup(true), 800);
-    return () => clearTimeout(timer);
-  }, [assignedRejected]);
-
-  return (
-    <Modal visible animationType="slide" onRequestClose={onClose}>
-      <View style={searchStyles.container}>
-        <StatusBar barStyle="dark-content" />
-
-        {/* Map placeholder */}
-        <View style={searchStyles.mapArea}>
-          <Image
-            source={{ uri: 'https://picsum.photos/seed/maphn/800/500' }}
-            style={searchStyles.mapImage}
-            resizeMode="cover"
-          />
-
-          {/* Back button */}
-          <TouchableOpacity style={searchStyles.backBtn} onPress={onClose}>
-            <Text style={searchStyles.backBtnText}>‹</Text>
-          </TouchableOpacity>
-
-          {/* Cancel order button */}
-          <TouchableOpacity style={searchStyles.cancelBtn} onPress={onClose}>
-            <Text style={searchStyles.cancelBtnText}>{strings.cancelOrder}</Text>
-          </TouchableOpacity>
-
-          {/* City label */}
-          <View style={searchStyles.cityLabel}>
-            <Text style={searchStyles.cityText}>Hà Nội</Text>
-          </View>
-
-          {/* Therapist avatars on map */}
-          {suggestedTherapists.slice(0, 3).map((t, i) => (
-            <View
-              key={t.id}
-              style={[
-                searchStyles.mapAvatar,
-                { top: 80 + i * 60, left: 50 + (i % 2) * 120 + i * 30 },
-              ]}
-            >
-              <Image source={{ uri: t.avatar }} style={searchStyles.mapAvatarImg} />
-            </View>
-          ))}
-
-          {/* Scanning pulse */}
-          <Animated.View
-            style={[
-              searchStyles.pulseCircle,
-              { transform: [{ scale: pulseAnim }] },
-            ]}
-          />
-        </View>
-
-        {/* Bottom sheet */}
-        <ScrollView style={searchStyles.bottomSheet} bounces={false}>
-          {/* Waiting status */}
-          <View style={searchStyles.waitingSection}>
-            <Text style={searchStyles.waitingTitle}>
-              {assignedTherapist
-                ? assignedRejected
-                  ? strings.waitingRejected.replace('{name}', assignedTherapist.name)
-                  : strings.waitingTitle.replace('{name}', assignedTherapist.name)
-                : strings.searchingNearby}
-            </Text>
-            <Text style={searchStyles.autoCancelText}>
-              {strings.autoCancel}{' '}
-              <Text style={searchStyles.countdownText}>{formatTime(countdown)}</Text>
-            </Text>
-          </View>
-
-          {/* Searching indicator */}
-          <View style={searchStyles.searchingRow}>
-            <ActivityIndicator size="small" color={COLORS.green} />
-            <Text style={searchStyles.searchingText}>{strings.searchingNearby}</Text>
-          </View>
-
-          {/* Suggested therapists header */}
-          <View style={searchStyles.suggestHeader}>
-            <Text style={searchStyles.suggestTitle}>
-              {strings.ktvCount.replace('{count}', String(suggestedTherapists.length))}
-            </Text>
-            {assignedTherapist ? (
-              <Text style={searchStyles.suggestSub}>
-                {strings.replaceFor.replace('{name}', assignedTherapist.name)}
-              </Text>
-            ) : null}
-          </View>
-
-          {/* Therapist list */}
-          {suggestedTherapists.map((therapist) => (
-            <View key={therapist.id} style={searchStyles.therapistCard}>
-              <Image source={{ uri: therapist.avatar }} style={searchStyles.therapistAvatar} />
-              <View style={searchStyles.therapistInfo}>
-                <Text style={searchStyles.therapistName}>{therapist.name}</Text>
-                <View style={searchStyles.therapistMeta}>
-                  <Text style={searchStyles.therapistStar}>⭐</Text>
-                  <Text style={searchStyles.therapistRating}>{therapist.rating.toFixed(1)}</Text>
-                  <Text style={searchStyles.therapistReviews}>
-                    ({therapist.reviewCount} {strings.reviewCount})
-                  </Text>
-                </View>
-                <Text style={searchStyles.therapistDistance}>
-                  ⊙ {therapist.distance} {strings.km}
-                </Text>
-              </View>
-              <View style={searchStyles.therapistRight}>
-                <Text style={searchStyles.readyText}>{strings.ready}</Text>
-                <TouchableOpacity style={searchStyles.chooseBtn} onPress={() => handleTherapistConfirmed(therapist)}>
-                  <Text style={searchStyles.chooseBtnText}>{strings.choose}</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          ))}
-
-          <View style={{ height: 40 }} />
-        </ScrollView>
-
-        {/* Popup: "Không cần chờ lâu" */}
-        {showPopup && (
-          <View style={searchStyles.popupOverlay}>
-            <View style={searchStyles.popupCard}>
-              <Text style={searchStyles.popupTitle}>{strings.noWaitTitle}</Text>
-              <Text style={searchStyles.popupDesc}>{strings.noWaitDesc}</Text>
-              <View style={searchStyles.popupAvatars}>
-                {suggestedTherapists.slice(0, 2).map((t) => (
-                  <Image key={t.id} source={{ uri: t.avatar }} style={searchStyles.popupAvatar} />
-                ))}
-              </View>
-              <TouchableOpacity
-                style={searchStyles.popupBtn}
-                onPress={() => setShowPopup(false)}
-              >
-                <Text style={searchStyles.popupBtnText}>{strings.viewKtvList}</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        )}
-
-        {/* Connected Chat */}
-        <Modal
-          visible={showConnectedChat}
-          animationType="slide"
-          onRequestClose={() => setShowConnectedChat(false)}
-        >
-          <ChatScreen onClose={() => setShowConnectedChat(false)} />
-        </Modal>
-      </View>
-    </Modal>
-  );
-}
-
-// ─── Booking Search Styles ──────────────────────────────────
-const searchStyles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: COLORS.white,
-  },
-  // Map
-  mapArea: {
-    height: SCREEN_W * 0.65,
-    backgroundColor: '#E8EBE4',
-    position: 'relative',
-    overflow: 'hidden',
-  },
-  mapImage: {
-    width: '100%',
-    height: '100%',
-    opacity: 0.85,
-  },
-  backBtn: {
-    position: 'absolute',
-    top: 50,
-    left: 16,
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: 'rgba(255,255,255,0.9)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.15,
-    shadowRadius: 3,
-    elevation: 3,
-  },
-  backBtnText: {
-    fontSize: 24,
-    lineHeight: 28,
-    fontWeight: '600',
-    color: COLORS.text,
-  },
-  cancelBtn: {
-    position: 'absolute',
-    top: 50,
-    right: 16,
-    backgroundColor: '#E53935',
-    paddingHorizontal: 18,
-    paddingVertical: 10,
-    borderRadius: 22,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 4,
-  },
-  cancelBtnText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  cityLabel: {
-    position: 'absolute',
-    top: '42%',
-    alignSelf: 'center',
-  },
-  cityText: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: COLORS.text,
-  },
-  mapAvatar: {
-    position: 'absolute',
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    borderWidth: 2,
-    borderColor: '#fff',
-    overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.2,
-    shadowRadius: 3,
-    elevation: 3,
-  },
-  mapAvatarImg: {
-    width: '100%',
-    height: '100%',
-  },
-  pulseCircle: {
-    position: 'absolute',
-    bottom: '35%',
-    alignSelf: 'center',
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: 'rgba(45, 134, 83, 0.35)',
-  },
-  // Bottom sheet
-  bottomSheet: {
-    flex: 1,
-    backgroundColor: COLORS.white,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    marginTop: -20,
-    paddingTop: 20,
-  },
-  waitingSection: {
-    paddingHorizontal: 24,
-    paddingBottom: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F0F0F0',
-  },
-  waitingTitle: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: COLORS.text,
-    marginBottom: 6,
-  },
-  autoCancelText: {
-    fontSize: 13,
-    color: COLORS.subText,
-  },
-  countdownText: {
-    fontWeight: '700',
-    color: COLORS.text,
-  },
-  searchingRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 24,
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F0F0F0',
-  },
-  searchingText: {
-    fontSize: 13,
-    color: COLORS.subText,
-  },
-  // Suggested header
-  suggestHeader: {
-    paddingHorizontal: 24,
-    paddingTop: 18,
-    paddingBottom: 14,
-  },
-  suggestTitle: {
-    fontSize: 17,
-    fontWeight: '800',
-    color: COLORS.text,
-    marginBottom: 4,
-  },
-  suggestSub: {
-    fontSize: 13,
-    color: COLORS.subText,
-  },
-  // Therapist card
-  therapistCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 24,
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F5F5F5',
-  },
-  therapistAvatar: {
-    width: 70,
-    height: 70,
-    borderRadius: 10,
-    marginRight: 14,
-    backgroundColor: COLORS.bg,
-  },
-  therapistInfo: {
-    flex: 1,
-  },
-  therapistName: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: COLORS.text,
-    marginBottom: 4,
-  },
-  therapistMeta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    marginBottom: 4,
-  },
-  therapistStar: {
-    fontSize: 14,
-  },
-  therapistRating: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: COLORS.gold,
-  },
-  therapistReviews: {
-    fontSize: 12,
-    color: COLORS.subText,
-  },
-  therapistDistance: {
-    fontSize: 13,
-    color: COLORS.subText,
-  },
-  therapistRight: {
-    alignItems: 'flex-end',
-    gap: 8,
-  },
-  readyText: {
-    fontSize: 12,
-    color: COLORS.green,
-    fontWeight: '600',
-  },
-  chooseBtn: {
-    backgroundColor: COLORS.green,
-    paddingHorizontal: 20,
-    paddingVertical: 8,
-    borderRadius: 18,
-  },
-  chooseBtnText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  // Popup
-  popupOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 30,
-  },
-  popupCard: {
-    backgroundColor: COLORS.white,
-    borderRadius: 24,
-    padding: 28,
-    alignItems: 'center',
-    width: '100%',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 12,
-    elevation: 8,
-  },
-  popupTitle: {
-    fontSize: 20,
-    fontWeight: '800',
-    color: COLORS.text,
-    textAlign: 'center',
-    marginBottom: 10,
-  },
-  popupDesc: {
-    fontSize: 14,
-    color: COLORS.subText,
-    textAlign: 'center',
-    lineHeight: 22,
-    marginBottom: 18,
-  },
-  popupAvatars: {
-    flexDirection: 'row',
-    marginBottom: 22,
-    gap: -10,
-  },
-  popupAvatar: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    borderWidth: 2,
-    borderColor: '#fff',
-  },
-  popupBtn: {
-    width: '100%',
-    backgroundColor: COLORS.green,
-    paddingVertical: 16,
-    borderRadius: 30,
-    alignItems: 'center',
-  },
-  popupBtnText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#fff',
-  },
-});
 
 // ─── Detail Styles ──────────────────────────────────────────
 const detailStyles = StyleSheet.create({
@@ -1337,7 +800,7 @@ const detailStyles = StyleSheet.create({
   addressCard: {
     marginHorizontal: 20,
     marginBottom: 16,
-    backgroundColor: '#F8F9FA',
+    backgroundColor: '#FFFBFB',
     borderRadius: 14,
     padding: 14,
     flexDirection: 'row',

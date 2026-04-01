@@ -1,7 +1,7 @@
 {
   "cli": {
     "version": ">= 15.0.0",
-    "appVersionSource": "remote"
+    "appVersionSource": "local"
   },
   "build": {
     "development": {
@@ -21,7 +21,7 @@
       }
     },
     "production": {
-      "autoIncrement": true
+      "autoIncrement": false
     }
   },
   "submit": {
@@ -31,8 +31,7 @@
         "track": "production"
       },
       "ios": {
-        "appleId": "YOUR_APPLE_ID@email.com",
-        "ascAppId": "YOUR_APP_STORE_CONNECT_APP_ID"
+        "ascAppId": "6761297457"
       }
     }
   }

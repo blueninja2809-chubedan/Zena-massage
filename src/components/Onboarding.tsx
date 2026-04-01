@@ -61,7 +61,7 @@ const styles = StyleSheet.create({
     flex: 1,
     padding: 22,
     justifyContent: 'center',
-    backgroundColor: '#F5F9FF',
+    backgroundColor: '#FFFBFB',
   },
   title: {
     fontSize: 28,
@@ -71,15 +71,15 @@ const styles = StyleSheet.create({
   },
   subtitle: {
     fontSize: 15,
-    color: '#5C85B0',
+    color: '#4B5563',
     marginBottom: 30,
   },
   stepCard: {
-    backgroundColor: '#F5F9FF',
+    backgroundColor: '#FFFBFB',
     borderRadius: 20,
     padding: 20,
     borderWidth: 1,
-    borderColor: '#B3D4F0',
+    borderColor: '#D1D9E6',
   },
   stepTitle: {
     fontSize: 18,
@@ -89,7 +89,7 @@ const styles = StyleSheet.create({
   },
   stepDescription: {
     fontSize: 14,
-    color: '#3D6E99',
+    color: '#4B5563',
     marginBottom: 20,
     lineHeight: 20,
   },
@@ -100,9 +100,9 @@ const styles = StyleSheet.create({
   },
   languageButton: {
     flex: 1,
-    backgroundColor: '#E3F2FD',
+    backgroundColor: '#FFCDD2',
     borderWidth: 1,
-    borderColor: '#B3D4F0',
+    borderColor: '#D1D9E6',
     borderRadius: 14,
     paddingVertical: 14,
     alignItems: 'center',
@@ -110,6 +110,6 @@ const styles = StyleSheet.create({
   languageButtonText: {
     fontSize: 15,
     fontWeight: '700',
-    color: '#1565C0',
+    color: '#C62828',
   },
 });

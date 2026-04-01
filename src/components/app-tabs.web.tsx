@@ -1,116 +1,108 @@
-import {
-  Tabs,
-  TabList,
-  TabTrigger,
-  TabSlot,
-  TabTriggerSlotProps,
-  TabListProps,
-} from 'expo-router/ui';
-import { SymbolView } from 'expo-symbols';
+import Feather from '@expo/vector-icons/Feather';
+import { Tabs } from 'expo-router';
 import React from 'react';
-import { Pressable, useColorScheme, View, StyleSheet } from 'react-native';
+import { useColorScheme } from 'react-native';
 
-import { ExternalLink } from './external-link';
-import { ThemedText } from './themed-text';
-import { ThemedView } from './themed-view';
+import { useLanguage } from '@/contexts/LanguageContext';
+import { useUser } from '@/contexts/UserContext';
 
-import { Colors, MaxContentWidth, Spacing } from '@/constants/theme';
+const TAB_COLORS = {
+  light: {
+    background: '#FFFBFB',
+    iconDefault: '#4B5563',
+    iconSelected: '#E53935',
+  },
+  dark: {
+    background: '#1A1212',
+    iconDefault: '#A18888',
+    iconSelected: '#FF8A80',
+  },
+} as const;
 
-export default function AppTabs() {
+type TabPalette = (typeof TAB_COLORS)[keyof typeof TAB_COLORS];
+
+function CustomerTabs({ palette, isEn }: { palette: TabPalette; isEn: boolean }) {
   return (
-    <Tabs>
-      <TabSlot style={{ height: '100%' }} />
-      <TabList asChild>
-        <CustomTabList>
-          <TabTrigger name="home" href="/" asChild>
-            <TabButton>Home</TabButton>
-          </TabTrigger>
-          <TabTrigger name="explore" href="/explore" asChild>
-            <TabButton>Explore</TabButton>
-          </TabTrigger>
-        </CustomTabList>
-      </TabList>
+    <Tabs
+      screenOptions={{
+        headerShown: false,
+        tabBarStyle: { backgroundColor: palette.background },
+        tabBarActiveTintColor: palette.iconSelected,
+        tabBarInactiveTintColor: palette.iconDefault,
+      }}>
+      <Tabs.Screen
+        name="index"
+        options={{
+          title: isEn ? 'Explore' : 'Khám phá',
+          tabBarIcon: ({ color, size }) => <Feather name="home" size={size} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="activity"
+        options={{
+          title: isEn ? 'Activity' : 'Hoạt động',
+          tabBarIcon: ({ color, size }) => <Feather name="clock" size={size} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="account"
+        options={{
+          title: isEn ? 'Account' : 'Tài khoản',
+          tabBarIcon: ({ color, size }) => <Feather name="user" size={size} color={color} />,
+        }}
+      />
+      <Tabs.Screen name="therapist-home" options={{ href: null }} />
+      <Tabs.Screen name="therapist-schedule" options={{ href: null }} />
     </Tabs>
   );
 }
 
-export function TabButton({ children, isFocused, ...props }: TabTriggerSlotProps) {
+function TherapistTabs({ palette, isEn }: { palette: TabPalette; isEn: boolean }) {
   return (
-    <Pressable {...props} style={({ pressed }) => pressed && styles.pressed}>
-      <ThemedView
-        type={isFocused ? 'backgroundSelected' : 'backgroundElement'}
-        style={styles.tabButtonView}>
-        <ThemedText type="small" themeColor={isFocused ? 'text' : 'textSecondary'}>
-          {children}
-        </ThemedText>
-      </ThemedView>
-    </Pressable>
+    <Tabs
+      screenOptions={{
+        headerShown: false,
+        tabBarStyle: { backgroundColor: palette.background },
+        tabBarActiveTintColor: palette.iconSelected,
+        tabBarInactiveTintColor: palette.iconDefault,
+      }}>
+      <Tabs.Screen
+        name="therapist-schedule"
+        options={{
+          title: isEn ? 'Explore' : 'Khám phá',
+          tabBarIcon: ({ color, size }) => <Feather name="calendar" size={size} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="therapist-home"
+        options={{
+          title: isEn ? 'Jobs' : 'Nhận việc',
+          tabBarIcon: ({ color, size }) => <Feather name="clipboard" size={size} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="account"
+        options={{
+          title: isEn ? 'Account' : 'Tài khoản',
+          tabBarIcon: ({ color, size }) => <Feather name="user" size={size} color={color} />,
+        }}
+      />
+      <Tabs.Screen name="index" options={{ href: null }} />
+      <Tabs.Screen name="activity" options={{ href: null }} />
+    </Tabs>
   );
 }
 
-export function CustomTabList(props: TabListProps) {
+export default function AppTabs() {
   const scheme = useColorScheme();
-  const colors = Colors[scheme === 'unspecified' ? 'light' : scheme];
+  const palette = TAB_COLORS[scheme === 'dark' ? 'dark' : 'light'];
+  const { user } = useUser();
+  const { language } = useLanguage();
+  const isEn = language === 'en';
 
-  return (
-    <View {...props} style={styles.tabListContainer}>
-      <ThemedView type="backgroundElement" style={styles.innerContainer}>
-        <ThemedText type="smallBold" style={styles.brandText}>
-          Expo Starter
-        </ThemedText>
+  if (user?.role === 'therapist') {
+    return <TherapistTabs palette={palette} isEn={isEn} />;
+  }
 
-        {props.children}
-
-        <ExternalLink href="https://docs.expo.dev" asChild>
-          <Pressable style={styles.externalPressable}>
-            <ThemedText type="link">Docs</ThemedText>
-            <SymbolView
-              tintColor={colors.text}
-              name={{ ios: 'arrow.up.right.square', web: 'link' }}
-              size={12}
-            />
-          </Pressable>
-        </ExternalLink>
-      </ThemedView>
-    </View>
-  );
+  return <CustomerTabs palette={palette} isEn={isEn} />;
 }
-
-const styles = StyleSheet.create({
-  tabListContainer: {
-    position: 'absolute',
-    width: '100%',
-    padding: Spacing.three,
-    justifyContent: 'center',
-    alignItems: 'center',
-    flexDirection: 'row',
-  },
-  innerContainer: {
-    paddingVertical: Spacing.two,
-    paddingHorizontal: Spacing.five,
-    borderRadius: Spacing.five,
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexGrow: 1,
-    gap: Spacing.two,
-    maxWidth: MaxContentWidth,
-  },
-  brandText: {
-    marginRight: 'auto',
-  },
-  pressed: {
-    opacity: 0.7,
-  },
-  tabButtonView: {
-    paddingVertical: Spacing.one,
-    paddingHorizontal: Spacing.three,
-    borderRadius: Spacing.three,
-  },
-  externalPressable: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: Spacing.one,
-    marginLeft: Spacing.three,
-  },
-});

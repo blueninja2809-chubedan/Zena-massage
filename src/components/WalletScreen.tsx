@@ -23,7 +23,7 @@ import { useUser } from '@/contexts/UserContext';
 import type { WalletTransaction } from '@/lib/supabaseService';
 import { createWithdrawalRequest, getOrCreateWallet, getWalletTransactions } from '@/lib/supabaseService';
 
-// ── Translations ──
+// —— Translations ——
 const TR: Record<OnboardingLanguage, Record<string, string>> = {
   vi: {
     title: 'Ví của tôi',
@@ -99,18 +99,18 @@ const TR: Record<OnboardingLanguage, Record<string, string>> = {
   },
 };
 
-// ── Colors (match app theme) ──
+// —— Colors (match app theme) ——
 const P = {
-  primary: '#2196F3',
-  primaryDark: '#1565C0',
-  bg: '#F5F9FF',
+  primary: '#E53935',
+  primaryDark: '#C62828',
+  bg: '#FFFBFB',
   card: '#FFFFFF',
   text: '#1A1A1A',
-  sub: '#5C85B0',
-  muted: '#C4A0A8',
-  line: '#F0DDE1',
-  accent: '#42A5F5',
-  success: '#2E7D52',
+  sub: '#4B5563',
+  muted: '#99D9D2',
+  line: '#C8E6C9',
+  accent: '#E53935',
+  success: '#1E3A5F',
   successBg: '#E8F5E9',
   warn: '#E39A1A',
   warnBg: '#FFF8E1',
@@ -136,15 +136,15 @@ function getTypeIcon(type: WalletTransaction['type']): { icon: keyof typeof Feat
     case 'topup':
       return { icon: 'arrow-down-circle', color: P.success, bg: P.successBg };
     case 'payment':
-      return { icon: 'shopping-cart', color: P.accent, bg: '#FDE8EA' };
+      return { icon: 'shopping-cart', color: P.accent, bg: '#FFCDD2' };
     case 'earning':
       return { icon: 'dollar-sign', color: P.success, bg: P.successBg };
     case 'fee':
       return { icon: 'percent', color: P.warn, bg: P.warnBg };
     case 'refund':
-      return { icon: 'rotate-ccw', color: '#1976D2', bg: '#E3F2FD' };
+      return { icon: 'rotate-ccw', color: '#C62828', bg: '#FFCDD2' };
     case 'withdrawal':
-      return { icon: 'arrow-up-circle', color: P.accent, bg: '#FDE8EA' };
+      return { icon: 'arrow-up-circle', color: P.accent, bg: '#FFCDD2' };
     default:
       return { icon: 'circle', color: P.sub, bg: P.bg };
   }
@@ -250,7 +250,7 @@ export default function WalletScreen({ onClose }: { onClose: () => void }) {
     <SafeAreaView style={s.safe} edges={['top']}>
       <StatusBar barStyle="light-content" backgroundColor={P.primary} />
 
-      {/* ── Header ── */}
+      {/* â”€â”€ Header â”€â”€ */}
       <View style={s.headerBg}>
         <View style={s.headerRow}>
           <TouchableOpacity style={s.backBtn} onPress={onClose} activeOpacity={0.7}>
@@ -285,7 +285,7 @@ export default function WalletScreen({ onClose }: { onClose: () => void }) {
         </View>
       </View>
 
-      {/* ── Body ── */}
+      {/* â”€â”€ Body â”€â”€ */}
       <View style={s.body}>
         {/* Filter tabs */}
         <View style={s.tabsRow}>
@@ -457,13 +457,13 @@ export default function WalletScreen({ onClose }: { onClose: () => void }) {
   );
 }
 
-// ═══════════════════════════════
-// ══         STYLES           ══
-// ═══════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// â•â•         STYLES           â•â•
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 const s = StyleSheet.create({
   safe: { flex: 1, backgroundColor: P.primary },
 
-  // ── Header ──
+  // â”€â”€ Header â”€â”€
   headerBg: {
     backgroundColor: P.primary,
     paddingBottom: 40,
@@ -492,7 +492,7 @@ const s = StyleSheet.create({
     letterSpacing: 0.3,
   },
 
-  // ── Balance card ──
+  // â”€â”€ Balance card â”€â”€
   balanceCard: {
     backgroundColor: '#FFFFFF',
     marginHorizontal: 20,
@@ -562,7 +562,7 @@ const s = StyleSheet.create({
     fontWeight: '700',
   },
 
-  // ── Body ──
+  // â”€â”€ Body â”€â”€
   body: {
     flex: 1,
     backgroundColor: P.bg,
@@ -572,7 +572,7 @@ const s = StyleSheet.create({
     paddingTop: 20,
   },
 
-  // ── Filter tabs ──
+  // â”€â”€ Filter tabs â”€â”€
   tabsRow: {
     flexDirection: 'row',
     paddingHorizontal: 16,
@@ -600,7 +600,7 @@ const s = StyleSheet.create({
     color: '#FFFFFF',
   },
 
-  // ── Section title ──
+  // â”€â”€ Section title â”€â”€
   sectionTitle: {
     fontSize: 16,
     fontWeight: '800',
@@ -609,7 +609,7 @@ const s = StyleSheet.create({
     marginBottom: 12,
   },
 
-  // ── List ──
+  // â”€â”€ List â”€â”€
   listWrap: {
     flex: 1,
   },
@@ -618,14 +618,14 @@ const s = StyleSheet.create({
     paddingBottom: 20,
   },
 
-  // ── Transaction card ──
+  // â”€â”€ Transaction card â”€â”€
   txnCard: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: P.card,
     borderRadius: 14,
     padding: 14,
-    shadowColor: '#2196F3',
+    shadowColor: '#E53935',
     shadowOpacity: 0.04,
     shadowRadius: 6,
     shadowOffset: { width: 0, height: 2 },
@@ -664,7 +664,7 @@ const s = StyleSheet.create({
   txnAmountIn: { color: P.success },
   txnAmountOut: { color: P.accent },
 
-  // ── Status chips ──
+  // â”€â”€ Status chips â”€â”€
   statusChip: {
     paddingHorizontal: 8,
     paddingVertical: 2,
@@ -681,7 +681,7 @@ const s = StyleSheet.create({
   statusTextPending: { color: P.warn },
   statusTextFailed: { color: P.error },
 
-  // ── Empty state ──
+  // â”€â”€ Empty state â”€â”€
   emptyWrap: {
     alignItems: 'center',
     paddingVertical: 48,
@@ -693,7 +693,7 @@ const s = StyleSheet.create({
     fontWeight: '500',
   },
 
-  // ── Withdrawal modal ──
+  // â”€â”€ Withdrawal modal â”€â”€
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.45)',

@@ -8,20 +8,18 @@ import { useUser } from '@/contexts/UserContext';
 
 const TAB_COLORS = {
   light: {
-    background: '#F5F9FF',
-    indicator: '#BBDEFB',
-    iconDefault: '#5C85B0',
-    iconSelected: '#2196F3',
-    textDefault: '#5C85B0',
-    textSelected: '#2196F3',
+    background: '#FFFBFB',
+    iconDefault: '#4B5563',
+    iconSelected: '#E53935',
+    textDefault: '#4B5563',
+    textSelected: '#E53935',
   },
   dark: {
-    background: '#0A1929',
-    indicator: '#1A3A5C',
-    iconDefault: '#7BAED4',
-    iconSelected: '#E3F2FD',
-    textDefault: '#7BAED4',
-    textSelected: '#E3F2FD',
+    background: '#1A1212',
+    iconDefault: '#A18888',
+    iconSelected: '#FF8A80',
+    textDefault: '#A18888',
+    textSelected: '#FFAB91',
   },
 } as const;
 
@@ -31,7 +29,9 @@ function CustomerTabs({ palette, isEn }: { palette: TabPalette; isEn: boolean })
   return (
     <NativeTabs
       backgroundColor={palette.background}
-      indicatorColor={palette.indicator}
+      disableIndicator
+      indicatorColor="transparent"
+      rippleColor="transparent"
       iconColor={{ default: palette.iconDefault, selected: palette.iconSelected }}
       labelStyle={{
         default: { color: palette.textDefault, fontSize: 12, fontWeight: '600' },
@@ -65,7 +65,9 @@ function TherapistTabs({ palette, isEn }: { palette: TabPalette; isEn: boolean }
   return (
     <NativeTabs
       backgroundColor={palette.background}
-      indicatorColor={palette.indicator}
+      disableIndicator
+      indicatorColor="transparent"
+      rippleColor="transparent"
       iconColor={{ default: palette.iconDefault, selected: palette.iconSelected }}
       labelStyle={{
         default: { color: palette.textDefault, fontSize: 12, fontWeight: '600' },

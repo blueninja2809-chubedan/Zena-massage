@@ -75,14 +75,14 @@ const translations: Record<OnboardingLanguage, Record<string, string>> = {
 };
 
 const C = {
-  bg: '#F5F9FF',
+  bg: '#FFFBFB',
   card: '#FFFFFF',
   text: '#1A1A1A',
-  sub: '#5C85B0',
-  line: '#F0E4E6',
-  accent: '#2196F3',
-  accentSoft: '#E3F2FD',
-  slotBg: '#F5F9FF',
+  sub: '#4B5563',
+  line: '#E2E8F0',
+  accent: '#E53935',
+  accentSoft: '#FFCDD2',
+  slotBg: '#FFCDD2',
 };
 
 const supportChannels = [

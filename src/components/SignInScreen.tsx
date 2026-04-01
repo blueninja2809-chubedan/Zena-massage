@@ -1,7 +1,14 @@
 import { useLanguage } from '@/contexts/LanguageContext';
+import type { OnboardingLanguage } from '@/components/Onboarding';
 import { UserData, useUser } from '@/contexts/UserContext';
+import { PhoneCountryField } from '@/components/PhoneCountryField';
+import type { CountryDial } from '@/constants/countryDialData';
+import { SocialAuthButtons } from '@/components/SocialAuthButtons';
+import { nationalDigitsToAppPhone } from '@/lib/phoneCountry';
 import { getLatestPartnerApplicationByUserId, signInUserAccountWithPhone } from '@/lib/supabaseService';
-import React, { useState } from 'react';
+import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
+import React, { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -15,18 +22,20 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { AppColors } from '@/constants/appColors';
 
 const COLORS = {
-  primary: '#2196F3',
-  primaryDark: '#1565C0',
-  primaryLight: '#E3F2FD',
-  bg: '#F0F6FF',
-  card: '#FFFFFF',
-  text: '#1A2B4A',
-  muted: '#6B7D99',
-  border: '#D4E4F7',
-  inputBg: '#F5F9FF',
+  primary: AppColors.primary,
+  primaryDeep: AppColors.primaryDark,
+  primaryMuted: AppColors.primaryMuted,
+  bg: '#FAFBFD',
+  text: AppColors.text,
+  textSecondary: AppColors.textMuted,
+  muted: '#94A3B8',
+  border: AppColors.border,
+  card: 'rgba(255,255,255,0.92)',
+  inputBg: '#F8FAFC',
 };
 
 export type SignInScreenProps = {
@@ -34,21 +43,85 @@ export type SignInScreenProps = {
   onNavigateSignUp: () => void;
 };
 
+async function applyPartnerAlerts(
+  userData: UserData,
+  uid: string,
+  isEn: boolean,
+): Promise<UserData> {
+  let latestApplication: Awaited<ReturnType<typeof getLatestPartnerApplicationByUserId>> = null;
+  try {
+    latestApplication = uid ? await getLatestPartnerApplicationByUserId(uid) : null;
+  } catch (appErr) {
+    console.warn('[SignIn] getLatestPartnerApplication failed:', appErr);
+  }
+  if (latestApplication) {
+    userData.partnerApplicationId = latestApplication.id;
+    userData.partnerApplicationStatus = latestApplication.status;
+  }
+  const canUpgradeRole =
+    latestApplication?.status === 'approved' && latestApplication.imageModerationStatus === 'approved';
+  if (canUpgradeRole && userData.role !== 'therapist') {
+    userData.role = 'therapist';
+    userData.partnerRoleApprovedAt = latestApplication?.approvedAt || new Date().toISOString();
+    userData.partnerRoleNoticeSeenAt = new Date().toISOString();
+    Alert.alert(
+      isEn ? 'Partner approved' : 'Đã duyệt đối tác',
+      isEn
+        ? 'Your partner profile has been approved. Your account is now Technician.'
+        : 'Hồ sơ đối tác của bạn đã được duyệt. Tài khoản hiện là vai trò Kỹ thuật viên.',
+    );
+  } else if (latestApplication?.status === 'pending') {
+    Alert.alert(
+      isEn ? 'Application pending' : 'Hồ sơ đang chờ duyệt',
+      isEn
+        ? 'Your partner registration is pending admin review.'
+        : 'Hồ sơ đăng ký đối tác của bạn đang chờ quản trị viên duyệt.',
+    );
+  }
+  return userData;
+}
+
 export function SignInScreen({ onBack, onNavigateSignUp }: SignInScreenProps) {
+  const insets = useSafeAreaInsets();
   const { setUser } = useUser();
-  const { language } = useLanguage();
-  const [phone, setPhone] = useState('');
-  const [password, setPassword] = useState('');
-  const [loading, setLoading] = useState(false);
+  const { language, setLanguage } = useLanguage();
   const isEn = language === 'en';
 
+  const [countryCode, setCountryCode] = useState('VN');
+  const [callingCode, setCallingCode] = useState('84');
+  const [national, setNational] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const onCountrySelect = (c: CountryDial) => {
+    setCountryCode(c.cca2);
+    setCallingCode(c.callingCode);
+  };
+
+  const toggleLang = () => {
+    const next: OnboardingLanguage = language === 'vi' ? 'en' : 'vi';
+    void setLanguage(next);
+  };
+
+  const handleOAuthUser = useCallback(
+    async (userData: UserData) => {
+      let next = userData;
+      if (!next.role) next.role = 'customer';
+      const uid = String(next.authUid ?? '');
+      delete (next as unknown as Record<string, unknown>).password;
+      next = await applyPartnerAlerts(next, uid, isEn);
+      await setUser(next);
+      onBack();
+    },
+    [isEn, onBack, setUser],
+  );
+
   const handleSignIn = async () => {
-    const trimmedPhone = phone.replace(/\s/g, '');
+    const trimmedPhone = nationalDigitsToAppPhone(callingCode, national);
     if (!trimmedPhone) {
       Alert.alert(isEn ? 'Error' : 'Lỗi', isEn ? 'Please enter phone number' : 'Vui lòng nhập số điện thoại');
       return;
     }
-
     if (!password || password.length < 6) {
       Alert.alert(
         isEn ? 'Error' : 'Lỗi',
@@ -70,156 +143,140 @@ export function SignInScreen({ onBack, onNavigateSignUp }: SignInScreenProps) {
         return;
       }
 
-      const userData = signedIn as unknown as UserData;
-      if (!userData.role) {
-        userData.role = 'customer';
-      }
-
+      let userData = signedIn as unknown as UserData;
+      if (!userData.role) userData.role = 'customer';
       const uid = String((signedIn as Record<string, unknown>).authUid ?? '');
-      let latestApplication: Awaited<ReturnType<typeof getLatestPartnerApplicationByUserId>> = null;
-      try {
-        latestApplication = uid ? await getLatestPartnerApplicationByUserId(uid) : null;
-      } catch (appErr) {
-        console.warn('[handleSignIn] getLatestPartnerApplication failed:', appErr);
-      }
-      if (latestApplication) {
-        userData.partnerApplicationId = latestApplication.id;
-        userData.partnerApplicationStatus = latestApplication.status;
-      }
-
-      const canUpgradeRole =
-        latestApplication?.status === 'approved' &&
-        latestApplication.imageModerationStatus === 'approved';
-      if (canUpgradeRole && userData.role !== 'therapist') {
-        userData.role = 'therapist';
-        userData.partnerRoleApprovedAt = latestApplication?.approvedAt || new Date().toISOString();
-        userData.partnerRoleNoticeSeenAt = new Date().toISOString();
-        Alert.alert(
-          isEn ? 'Partner approved' : 'Đã duyệt đối tác',
-          isEn
-            ? 'Your partner profile has been approved. Your account is now Technician.'
-            : 'Hồ sơ đối tác của bạn đã được duyệt. Tài khoản hiện là vai trò Kỹ thuật viên.',
-        );
-      } else if (latestApplication?.status === 'pending') {
-        Alert.alert(
-          isEn ? 'Application pending' : 'Hồ sơ đang chờ duyệt',
-          isEn
-            ? 'Your partner registration is pending admin review.'
-            : 'Hồ sơ đăng ký đối tác của bạn đang chờ quản trị viên duyệt.',
-        );
-      }
-
+      userData = await applyPartnerAlerts(userData, uid, isEn);
       delete (userData as unknown as Record<string, unknown>).password;
       await setUser(userData);
       onBack();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error('[handleSignIn] Error:', msg, err);
-      Alert.alert(
-        isEn ? 'Error' : 'Lỗi',
-        isEn
-          ? `Sign in failed: ${msg}`
-          : `Đăng nhập thất bại: ${msg}`,
-      );
+      console.error('[handleSignIn]', msg, err);
+      Alert.alert(isEn ? 'Error' : 'Lỗi', isEn ? `Sign in failed: ${msg}` : `Đăng nhập thất bại: ${msg}`);
     } finally {
       setLoading(false);
     }
   };
 
+  const busy = loading;
+
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
-      <StatusBar barStyle="dark-content" backgroundColor={COLORS.bg} />
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
+    <SafeAreaView style={styles.safe} edges={['left', 'right', 'bottom']}>
+      <StatusBar barStyle="dark-content" />
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView
-          contentContainerStyle={styles.scrollContent}
-          showsVerticalScrollIndicator={false}
+          contentContainerStyle={styles.scroll}
           keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
         >
-          {/* Hero / Branding */}
-          <View style={styles.heroSection}>
-            <Text style={styles.heroAppName}>ZENA</Text>
-            <Text style={styles.heroTagline}>
-              {isEn ? 'Book massage at home, easily' : 'Đặt massage tại nhà, dễ dàng'}
-            </Text>
-          </View>
-
-          {/* Form Card */}
-          <View style={styles.card}>
-            <Text style={styles.title}>{isEn ? 'Welcome back' : 'Chào mừng trở lại'}</Text>
-            <Text style={styles.subtitle}>
-              {isEn ? 'Sign in to continue' : 'Đăng nhập để tiếp tục'}
-            </Text>
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.label}>{isEn ? 'Phone number' : 'Số điện thoại'}</Text>
-              <View style={styles.inputWrap}>
-                <Text style={styles.inputIcon}>📱</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder={isEn ? 'Enter phone number' : 'Nhập số điện thoại'}
-                  placeholderTextColor="#9BB0CC"
-                  keyboardType="phone-pad"
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  value={phone}
-                  onChangeText={setPhone}
-                  editable={!loading}
-                />
-              </View>
+          <LinearGradient
+            colors={['#FFCDD2', '#FFF0EE', '#FFF5F5', '#FFFCF9']}
+            locations={[0, 0.35, 0.72, 1]}
+            style={[styles.gradient, { paddingTop: insets.top + 6 }]}
+          >
+            <View style={styles.orbWrap} pointerEvents="none">
+              <View style={[styles.orb, styles.orbA]} />
+              <View style={[styles.orb, styles.orbB]} />
             </View>
 
-            <View style={styles.inputGroup}>
-              <Text style={styles.label}>{isEn ? 'Password' : 'Mật khẩu'}</Text>
-              <View style={styles.inputWrap}>
-                <Text style={styles.inputIcon}>🔒</Text>
+            <View style={styles.topBar}>
+              <TouchableOpacity style={styles.iconBtn} onPress={onBack} hitSlop={10} accessibilityRole="button">
+                <Ionicons name="close" size={22} color={COLORS.textSecondary} />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.langPill} onPress={toggleLang} activeOpacity={0.85}>
+                <Text style={styles.langFlag}>{language === 'vi' ? '🇻🇳' : '🇬🇧'}</Text>
+                <Text style={styles.langText}>{language === 'vi' ? 'VI' : 'EN'}</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.hero}>
+              <Text style={styles.heroGreeting}>
+                {isEn ? 'Welcome back to ' : 'Chào mừng trở lại với '}
+                <Text style={styles.heroBrand}>Zena</Text>
+              </Text>
+            </View>
+
+            <View style={styles.card}>
+              <SocialAuthButtons isEn={isEn} onUserReady={handleOAuthUser} />
+
+              <View style={styles.orRow}>
+                <View style={styles.orLine} />
+                <Text style={styles.orText}>{isEn ? 'Or' : 'Hoặc'}</Text>
+                <View style={styles.orLine} />
+              </View>
+
+              <Text style={styles.label}>{isEn ? 'Phone number' : 'Số điện thoại'}</Text>
+              <PhoneCountryField
+                countryCode={countryCode}
+                callingCode={callingCode}
+                nationalNumber={national}
+                onCountrySelect={onCountrySelect}
+                onChangeNational={setNational}
+                placeholder={isEn ? 'Enter phone number' : 'Nhập số điện thoại'}
+                editable={!busy}
+              />
+
+              <View style={styles.pwRow}>
+                <Text style={styles.label}>{isEn ? 'Password' : 'Mật khẩu'}</Text>
+                <TouchableOpacity
+                  onPress={() =>
+                    Alert.alert(
+                      isEn ? 'Forgot password' : 'Quên mật khẩu',
+                      isEn ? 'Please contact support in the app.' : 'Vui lòng liên hệ hỗ trợ trong ứng dụng.',
+                    )
+                  }
+                >
+                  <Text style={styles.forgot}>{isEn ? 'Forgot?' : 'Quên mật khẩu?'}</Text>
+                </TouchableOpacity>
+              </View>
+              <View style={styles.pwWrap}>
+                <Ionicons name="lock-closed-outline" size={20} color={COLORS.muted} style={styles.pwIcon} />
                 <TextInput
-                  style={styles.input}
+                  style={styles.pwInput}
                   placeholder={isEn ? 'Enter password' : 'Nhập mật khẩu'}
-                  placeholderTextColor="#9BB0CC"
+                  placeholderTextColor="#94A3B8"
                   secureTextEntry
                   value={password}
                   onChangeText={setPassword}
-                  editable={!loading}
+                  editable={!busy}
                 />
               </View>
+
+              <TouchableOpacity
+                style={[styles.btnPrimary, busy && styles.btnDisabled]}
+                onPress={() => void handleSignIn()}
+                disabled={busy}
+                activeOpacity={0.92}
+              >
+                <LinearGradient
+                  colors={[COLORS.primaryMuted, COLORS.primaryDeep]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.btnPrimaryFill}
+                >
+                  {loading ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={styles.btnPrimaryText}>{isEn ? 'Sign in' : 'Đăng nhập'}</Text>
+                  )}
+                </LinearGradient>
+              </TouchableOpacity>
             </View>
 
-            <TouchableOpacity
-              style={[styles.primaryBtn, loading && styles.primaryBtnDisabled]}
-              onPress={handleSignIn}
-              disabled={loading}
-              activeOpacity={0.85}
-            >
-              {loading ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <Text style={styles.primaryBtnText}>{isEn ? 'Sign In' : 'Đăng nhập'}</Text>
-              )}
-            </TouchableOpacity>
-          </View>
+            <View style={styles.footerRow}>
+              <Text style={styles.footerMuted}>{isEn ? "Don't have an account? " : 'Bạn chưa có tài khoản? '}</Text>
+              <TouchableOpacity onPress={onNavigateSignUp} disabled={busy}>
+                <Text style={styles.footerLink}>{isEn ? 'Sign up' : 'Đăng ký'}</Text>
+              </TouchableOpacity>
+            </View>
 
-          {/* Divider */}
-          <View style={styles.dividerRow}>
-            <View style={styles.dividerLine} />
-            <Text style={styles.dividerText}>{isEn ? 'or' : 'hoặc'}</Text>
-            <View style={styles.dividerLine} />
-          </View>
-
-          {/* Sign Up CTA */}
-          <TouchableOpacity
-            style={styles.signUpBtn}
-            onPress={onNavigateSignUp}
-            activeOpacity={0.85}
-          >
-            <Text style={styles.signUpBtnText}>
-              {isEn ? 'Create new account' : 'Tạo tài khoản mới'}
+            <Text style={styles.legal}>
+              {isEn ? 'By continuing, you agree to our ' : 'Bằng cách tiếp tục, bạn đồng ý với '}
+              <Text style={styles.legalLink}>{isEn ? 'Terms & Policy' : 'Điều khoản & Chính sách'}</Text>
+              .
             </Text>
-          </TouchableOpacity>
-
-
+          </LinearGradient>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -227,140 +284,192 @@ export function SignInScreen({ onBack, onNavigateSignUp }: SignInScreenProps) {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: COLORS.bg,
+  safe: { flex: 1, backgroundColor: COLORS.bg },
+  scroll: { paddingBottom: 48 },
+  gradient: {
+    flexGrow: 1,
+    paddingHorizontal: 20,
+    overflow: 'hidden',
   },
-  scrollContent: {
-    paddingBottom: 40,
+  orbWrap: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 0,
   },
-  // ── Hero ──
-  heroSection: {
+  orb: {
+    position: 'absolute',
+    borderRadius: 999,
+  },
+  orbA: {
+    width: 280,
+    height: 280,
+    top: -90,
+    right: -100,
+    backgroundColor: 'rgba(62, 191, 180, 0.32)',
+  },
+  orbB: {
+    width: 220,
+    height: 220,
+    bottom: 120,
+    left: -80,
+    backgroundColor: 'rgba(120, 190, 185, 0.22)',
+  },
+  /** Một hàng cố định chiều cao — hai nút cùng 44px, căn giữa trục dọc, lệch trái/phải đều với padding ngang màn hình. */
+  topBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    paddingTop: 24,
-    paddingBottom: 20,
+    height: 44,
+    marginBottom: 12,
+    zIndex: 1,
   },
-  heroAppName: {
-    fontSize: 48,
-    fontWeight: '900',
-    color: '#5BA3E6',
-    letterSpacing: 1,
-    fontStyle: 'italic',
-  },
-  heroTagline: {
-    fontSize: 13,
-    color: COLORS.muted,
-    letterSpacing: 0.3,
-    marginTop: 6,
-  },
-  // ── Card ──
-  card: {
-    marginHorizontal: 20,
-    backgroundColor: COLORS.card,
+  iconBtn: {
+    width: 44,
+    height: 44,
     borderRadius: 22,
-    padding: 22,
-    shadowColor: '#1565C0',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 16,
-    elevation: 6,
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.95)',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.07,
+    shadowRadius: 8,
+    elevation: 3,
   },
-  title: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: COLORS.text,
+  langPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    height: 44,
+    minWidth: 44,
+    paddingHorizontal: 14,
+    paddingVertical: 0,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.95)',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.07,
+    shadowRadius: 8,
+    elevation: 3,
   },
-  subtitle: {
-    marginTop: 4,
-    fontSize: 14,
-    color: COLORS.muted,
+  langFlag: { fontSize: 17 },
+  langText: { fontSize: 13, fontWeight: '800', color: COLORS.text, letterSpacing: 0.3 },
+  hero: {
+    alignItems: 'flex-start',
+    alignSelf: 'stretch',
     marginBottom: 20,
+    zIndex: 1,
   },
-  inputGroup: {
-    marginBottom: 16,
+  heroGreeting: {
+    alignSelf: 'stretch',
+    textAlign: 'left',
+    fontSize: 24,
+    fontWeight: '700',
+    color: COLORS.text,
+    letterSpacing: -0.3,
+    lineHeight: 32,
+  },
+  heroBrand: {
+    fontWeight: '800',
+    color: COLORS.primaryDeep,
+  },
+  card: {
+    backgroundColor: COLORS.card,
+    borderRadius: 26,
+    paddingHorizontal: 20,
+    paddingTop: 32,
+    paddingBottom: 26,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.95)',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.09,
+    shadowRadius: 28,
+    elevation: 6,
+    zIndex: 1,
+  },
+  btnDisabled: { opacity: 0.55 },
+  orRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 18, marginTop: 8 },
+  orLine: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: 'rgba(148, 163, 184, 0.45)' },
+  orText: {
+    marginHorizontal: 14,
+    fontSize: 12,
+    color: COLORS.muted,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
   },
   label: {
     fontSize: 13,
     fontWeight: '700',
     color: COLORS.text,
     marginBottom: 8,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    letterSpacing: 0.2,
   },
-  inputWrap: {
+  pwRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 18,
+    marginBottom: 8,
+  },
+  forgot: { fontSize: 13, fontWeight: '700', color: COLORS.primaryDeep },
+  pwWrap: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: COLORS.inputBg,
-    borderWidth: 1.5,
-    borderColor: COLORS.border,
-    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 16,
     paddingHorizontal: 14,
+    marginBottom: 4,
   },
-  inputIcon: {
-    fontSize: 16,
-    marginRight: 10,
-  },
-  input: {
+  pwIcon: { marginRight: 10 },
+  pwInput: {
     flex: 1,
-    paddingVertical: 14,
-    fontSize: 15,
+    paddingVertical: 15,
+    fontSize: 16,
     color: COLORS.text,
   },
-  primaryBtn: {
-    marginTop: 8,
-    backgroundColor: COLORS.primary,
-    borderRadius: 14,
-    paddingVertical: 15,
+  btnPrimary: {
+    marginTop: 18,
+    borderRadius: 16,
+    overflow: 'hidden',
+    shadowColor: COLORS.primaryDeep,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.28,
+    shadowRadius: 16,
+    elevation: 5,
+  },
+  btnPrimaryFill: {
+    paddingVertical: 16,
     alignItems: 'center',
-    shadowColor: COLORS.primary,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 4,
+    justifyContent: 'center',
+    minHeight: 54,
   },
-  primaryBtnDisabled: {
-    opacity: 0.7,
-  },
-  primaryBtnText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-  },
-  // ── Divider ──
-  dividerRow: {
+  btnPrimaryText: { color: '#fff', fontSize: 16, fontWeight: '800', letterSpacing: 0.3 },
+  footerRow: {
     flexDirection: 'row',
+    justifyContent: 'center',
     alignItems: 'center',
-    marginHorizontal: 40,
-    marginTop: 24,
-    marginBottom: 16,
+    marginTop: 22,
+    flexWrap: 'wrap',
+    zIndex: 1,
   },
-  dividerLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: COLORS.border,
-  },
-  dividerText: {
-    marginHorizontal: 14,
-    fontSize: 13,
+  footerMuted: { fontSize: 14, color: COLORS.textSecondary },
+  footerLink: { fontSize: 14, fontWeight: '800', color: COLORS.primaryDeep },
+  legal: {
+    marginTop: 18,
+    textAlign: 'center',
+    fontSize: 12,
     color: COLORS.muted,
-    fontWeight: '600',
+    lineHeight: 18,
+    paddingHorizontal: 12,
+    zIndex: 1,
   },
-  // ── Sign Up Button ──
-  signUpBtn: {
-    marginHorizontal: 20,
-    borderWidth: 2,
-    borderColor: COLORS.primary,
-    borderRadius: 14,
-    paddingVertical: 14,
-    alignItems: 'center',
-    backgroundColor: COLORS.card,
-  },
-  signUpBtnText: {
-    color: COLORS.primary,
-    fontSize: 15,
-    fontWeight: '700',
-    letterSpacing: 0.3,
-  },
-
+  legalLink: { fontWeight: '700', color: COLORS.primaryDeep },
 });

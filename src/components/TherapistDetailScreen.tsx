@@ -33,7 +33,7 @@ function getTherapistPhotos(therapist: Therapist): string[] {
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 const COLORS = {
-  green: '#2D8653',
+  green: '#C62828',
   greenLight: '#E8F5EE',
   greenBorder: '#A8D5BA',
   bg: '#F5F5F5',

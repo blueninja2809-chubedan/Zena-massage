@@ -2,15 +2,15 @@ import Feather from '@expo/vector-icons/Feather';
 import { useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
-  Platform,
-  ScrollView,
-  StatusBar,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
+    ActivityIndicator,
+    Alert,
+    Platform,
+    ScrollView,
+    StatusBar,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -64,12 +64,12 @@ const C = {
   card: '#FFFFFF',
   text: '#111111',
   sub: '#72757D',
-  lightBorder: '#F0E4E6',
+  lightBorder: '#E2E8F0',
   goldA: '#FDEAB0',
   goldB: '#E8B16C',
-  primary: '#2196F3',
-  primarySoft: '#E3F2FD',
-  success: '#2D8653',
+  primary: '#E53935',
+  primarySoft: '#FFCDD2',
+  success: '#C62828',
 };
 
 const COPY = {

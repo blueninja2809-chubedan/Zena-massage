@@ -377,7 +377,7 @@ export async function signInUserAccountWithPhone(
 }
 
 export async function signOutUserAccount(): Promise<void> {
-  // Custom auth: nothing to do server-side, AsyncStorage is cleared by UserContext
+  await supabase.auth.signOut().catch(() => {});
 }
 
 /**
@@ -408,7 +408,11 @@ export async function getServiceById(serviceId: string): Promise<Service | null>
 /**
  * THERAPISTS
  */
-export async function getTherapists(): Promise<Therapist[]> {
+const THERAPISTS_CACHE_TTL_MS = 45_000;
+let therapistsCache: { list: Therapist[]; fetchedAt: number } | null = null;
+let therapistsFetchInFlight: Promise<Therapist[]> | null = null;
+
+async function fetchTherapistsUncached(): Promise<Therapist[]> {
   // First try RPC that filters by minimum wallet balance (500,000đ)
   try {
     const { data: rpcData, error: rpcError } = await withTimeout(
@@ -430,6 +434,26 @@ export async function getTherapists(): Promise<Therapist[]> {
     return FALLBACK_THERAPISTS;
   }
   return (data as JsonObject[]).map((row: JsonObject) => mapTherapist(row));
+}
+
+export async function getTherapists(): Promise<Therapist[]> {
+  const now = Date.now();
+  if (therapistsCache && now - therapistsCache.fetchedAt < THERAPISTS_CACHE_TTL_MS) {
+    return therapistsCache.list;
+  }
+  if (therapistsFetchInFlight) {
+    return therapistsFetchInFlight;
+  }
+  therapistsFetchInFlight = (async () => {
+    try {
+      const list = await fetchTherapistsUncached();
+      therapistsCache = { list, fetchedAt: Date.now() };
+      return list;
+    } finally {
+      therapistsFetchInFlight = null;
+    }
+  })();
+  return therapistsFetchInFlight;
 }
 
 export async function getTherapistById(therapistId: string): Promise<Therapist | null> {
@@ -523,6 +547,62 @@ export async function createSharedBookingRecord(data: Record<string, unknown>): 
     throw error ?? new Error('create-shared-booking-failed');
   }
   return String(row.id);
+}
+
+export async function deleteBookingRecord(bookingId: string): Promise<void> {
+  const { error } = await withTimeout(supabase.from('bookings').delete().eq('id', bookingId));
+  if (error) throw error;
+}
+
+/** Merge payload and optionally set top-level status (e.g. confirm after Glow payment). */
+export async function mergeBookingPayload(
+  bookingId: string,
+  patch: Record<string, unknown>,
+  status?: string,
+): Promise<void> {
+  const { data: row, error: e1 } = await withTimeout(
+    supabase.from('bookings').select('payload').eq('id', bookingId).maybeSingle(),
+  );
+  if (e1) throw e1;
+  const prev =
+    row && typeof row.payload === 'object' && row.payload !== null
+      ? (row.payload as Record<string, unknown>)
+      : {};
+  const update: Record<string, unknown> = {
+    payload: { ...prev, ...patch },
+    updated_at: new Date().toISOString(),
+  };
+  if (status) update.status = status;
+  const { error: e2 } = await withTimeout(supabase.from('bookings').update(update).eq('id', bookingId));
+  if (e2) throw e2;
+}
+
+/** Client confirms PayOS after polling PAID (webhook may have already completed the row). */
+export async function confirmPayosForBookingUser(
+  orderCode: number,
+  userId: string,
+): Promise<{ ok: boolean; reason?: string; bookingId?: string }> {
+  const { data, error } = await withTimeout(
+    supabase.rpc('confirm_payos_for_booking_user', {
+      p_order_code: orderCode,
+      p_user_id: userId,
+    }),
+  );
+  if (error) throw error;
+  const r = data as { ok?: boolean; reason?: string; booking_id?: string };
+  return {
+    ok: !!r?.ok,
+    reason: typeof r?.reason === 'string' ? r.reason : undefined,
+    bookingId: r?.booking_id ? String(r.booking_id) : undefined,
+  };
+}
+
+export async function getBookingStatus(bookingId: string): Promise<string | null> {
+  const { data, error } = await withTimeout(
+    supabase.from('bookings').select('status').eq('id', bookingId).maybeSingle(),
+  );
+  if (error || !data) return null;
+  return data.status != null ? String(data.status) : null;
 }
 
 export async function getSharedBookingRecords(): Promise<(Record<string, unknown> & { id: string })[]> {
@@ -815,6 +895,19 @@ export async function createNotification(notificationData: Omit<Notification, 'i
   );
   if (error) {
     throw error;
+  }
+
+  // Send push notification to the user's device
+  try {
+    const { sendPushToUser } = await import('@/contexts/NotificationContext');
+    await sendPushToUser(
+      notificationData.userId,
+      notificationData.title,
+      notificationData.message,
+      { type: notificationData.type, relatedId: notificationData.relatedId },
+    );
+  } catch {
+    // Push is best-effort, don't fail the notification creation
   }
 }
 

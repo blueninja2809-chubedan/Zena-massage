@@ -26,13 +26,23 @@ import {
     TouchableOpacity,
     View
 } from 'react-native';
-import MapView, { Circle, Marker } from 'react-native-maps';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+// react-native-maps is not supported on web – lazy import for native only
+let MapView: React.ComponentType<any> | null = null;
+let Circle: React.ComponentType<any> | null = null;
+let Marker: React.ComponentType<any> | null = null;
+if (Platform.OS !== 'web') {
+  const RNMaps = require('react-native-maps');
+  MapView = RNMaps.default;
+  Circle = RNMaps.Circle;
+  Marker = RNMaps.Marker;
+}
+
 const COLORS = {
-  green: '#2D8653',
-  greenLight: '#E8F5EE',
-  greenBorder: '#A8D5BA',
+  green: '#E53935',
+  greenLight: '#FFCDD2',
+  greenBorder: '#D1D9E6',
   bg: '#F5F5F5',
   white: '#fff',
   text: '#1A1A1A',
@@ -701,7 +711,7 @@ function BookingSearchModal({
   const [nearbyPositions, setNearbyPositions] = useState<
     (NearbyTherapist & { coordinate: { latitude: number; longitude: number } })[]
   >([]);
-  const mapRef = useRef<MapView>(null);
+  const mapRef = useRef<any>(null);
 
   // Get user location
   useEffect(() => {
@@ -842,6 +852,7 @@ function BookingSearchModal({
 
         {/* Real Map area */}
         <View style={bs.mapArea}>
+          {Platform.OS !== 'web' && MapView && Circle && Marker ? (
           <MapView
             ref={mapRef}
             style={bs.mapView}
@@ -899,6 +910,12 @@ function BookingSearchModal({
               </View>
             </Marker>
           </MapView>
+          ) : (
+            <View style={[bs.mapView, { backgroundColor: '#FFCDD2', justifyContent: 'center', alignItems: 'center' }]}>
+              <Text style={{ fontSize: 48 }}>📍</Text>
+              <Text style={{ color: '#E53935', fontWeight: '600', marginTop: 8 }}>Đang tìm kỹ thuật viên gần bạn...</Text>
+            </View>
+          )}
 
           {/* Animated radar overlay on map */}
           <View style={bs.radarOverlay} pointerEvents="none">

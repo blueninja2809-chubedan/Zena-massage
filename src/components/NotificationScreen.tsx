@@ -49,7 +49,7 @@ const COLORS = {
 };
 
 const NOTIF_ICON: Record<Notification['type'], { emoji: string; bg: string; color: string }> = {
-  booking: { emoji: '�', bg: '#E3F2FD', color: '#1976D2' },
+  booking: { emoji: '📋', bg: '#FFCDD2', color: '#C62828' },
   promotion: { emoji: '🎁', bg: '#FFF3E0', color: '#F57C00' },
   reminder: { emoji: '⏰', bg: '#FFF8E1', color: '#FFA000' },
   review: { emoji: '⭐', bg: '#FFFDE7', color: '#F9A825' },
@@ -366,7 +366,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#F0F1F3',
   },
   tabChipActive: {
-    backgroundColor: '#2196F3',
+    backgroundColor: '#E53935',
   },
   tabLabel: {
     fontSize: 13,

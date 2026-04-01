@@ -23,13 +23,13 @@ import ReviewModal from './ReviewModal';
 import TherapistDetailScreen from './TherapistDetailScreen';
 
 const COLORS = {
-  primary: '#2196F3',
-  dark: '#1565C0',
-  light: '#90CAF9',
-  bg: '#F5F9FF',
+  primary: '#E53935',
+  dark: '#C62828',
+  light: '#EF5350',
+  bg: '#FFFBFB',
   text: '#1A1A1A',
-  lightText: '#5C85B0',
-  accent: '#42A5F5',
+  lightText: '#4B5563',
+  accent: '#E53935',
 };
 
 const translations = {
@@ -88,13 +88,13 @@ const translations = {
 const getStatusColor = (status: string) => {
   switch (status) {
     case 'confirmed':
-      return '#2196F3';
+      return '#E53935';
     case 'pending':
-      return '#A73A49';
+      return '#E69500';
     case 'completed':
-      return '#7A4B52';
+      return '#4B5563';
     case 'cancelled':
-      return '#C4455A';
+      return '#E53935';
     default:
       return COLORS.primary;
   }
@@ -507,10 +507,10 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   cancelBtn: {
-    backgroundColor: '#FBE9EC',
+    backgroundColor: '#FFCDD2',
   },
   cancelBtnText: {
-    color: '#42A5F5',
+    color: '#E53935',
   },
   reviewBtn: {
     backgroundColor: '#E8F5E9',

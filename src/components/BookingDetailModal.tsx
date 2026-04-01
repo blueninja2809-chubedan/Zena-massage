@@ -12,19 +12,19 @@ import {
 } from 'react-native';
 
 const COLORS = {
-  primary: '#2196F3',
-  dark: '#1565C0',
-  bg: '#F5F9FF',
+  primary: '#E53935',
+  dark: '#C62828',
+  bg: '#FFFBFB',
   text: '#1A1A1A',
-  lightText: '#5C85B0',
+  lightText: '#4B5563',
   success: '#2E7D32',
   successBg: '#E8F5E9',
   cancel: '#C62828',
   cancelBg: '#FFEBEE',
   pending: '#E65100',
   pendingBg: '#FFF3E0',
-  confirmed: '#1565C0',
-  confirmedBg: '#E3F2FD',
+  confirmed: '#C62828',
+  confirmedBg: '#FFCDD2',
   divider: '#E8E8E8',
   white: '#FFFFFF',
   grey: '#F5F5F5',
@@ -100,7 +100,7 @@ function StatusIllustration({ status }: { status: string }) {
     bgColor = '#FFF3E0';
   } else if (isConfirmed) {
     iconName = 'check-circle';
-    bgColor = '#E3F2FD';
+    bgColor = '#FFCDD2';
   } else if (isSuccess) {
     iconName = 'check-circle';
     bgColor = '#E8F5E9';

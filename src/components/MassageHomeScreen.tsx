@@ -24,15 +24,15 @@ import TherapistDetailScreen from './TherapistDetailScreen';
 const TAGS = ['Mới cập nhật', 'Mới đến', 'Chất lượng'];
 
 const TAG_COLORS: Record<string, { bg: string; text: string }> = {
-  'Chất lượng': { bg: '#2D8653', text: '#fff' },
-  'Mới đến': { bg: '#1565C0', text: '#fff' },
-  'Mới cập nhật': { bg: '#2D8653', text: '#fff' },
+  'Chất lượng': { bg: '#E53935', text: '#fff' },
+  'Mới đến': { bg: '#C62828', text: '#fff' },
+  'Mới cập nhật': { bg: '#E53935', text: '#fff' },
 };
 
 const COLORS = {
-  green: '#2D8653',
-  greenLight: '#E8F5EE',
-  bg: '#F5F5F5',
+  green: '#E53935',
+  greenLight: '#FFCDD2',
+  bg: '#FFFBFB',
   white: '#fff',
   text: '#1A1A1A',
   subText: '#666',

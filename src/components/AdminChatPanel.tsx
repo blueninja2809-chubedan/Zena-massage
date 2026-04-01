@@ -22,7 +22,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 const COLORS = {
   bg: '#F5F5F5',
   white: '#FFFFFF',
-  primary: '#2196F3',
+  primary: '#E53935',
   danger: '#E53935',
   success: '#43A047',
   text: '#1A1A1A',

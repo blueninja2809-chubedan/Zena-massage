@@ -74,17 +74,17 @@ const translations: Record<OnboardingLanguage, Record<string, string>> = {
 };
 
 const C = {
-  bg: '#F5F9FF',
+  bg: '#FFFBFB',
   card: '#FFFFFF',
   text: '#1A1A1A',
-  sub: '#5C85B0',
-  line: '#F0E4E6',
-  accent: '#2196F3',
-  accentSoft: '#E3F2FD',
-  chip: '#F5F9FF',
+  sub: '#4B5563',
+  line: '#C8E6C9',
+  accent: '#E53935',
+  accentSoft: '#FFCDD2',
+  chip: '#FFCDD2',
   urgent: '#F2A51D',
-  complete: '#D8B8BF',
-  info: '#42A5F5',
+  complete: '#EF5350',
+  info: '#E53935',
 };
 const ALL_SERVICE = 'Tất cả';
 
@@ -233,7 +233,7 @@ export default function TherapistDashboard() {
             <Text style={s.earningValue}>+{earned.toLocaleString('vi-VN')} đ</Text>
           </View>
           <TouchableOpacity
-            activeOpacity={0.85}
+            activeOpacity={1}
             onPress={() => applyToJob(item)}
             style={[s.applyButton, applyDisabled && s.applyButtonDisabled]}
             disabled={applyDisabled}
@@ -299,6 +299,7 @@ export default function TherapistDashboard() {
           <View style={s.filterHead}>
             <Text style={s.filterTitle}>{t.filter}</Text>
             <TouchableOpacity
+              activeOpacity={1}
               onPress={() => {
                 setSelectedCity(DEFAULT_CITY);
                 setSelectedService(ALL_SERVICE);
@@ -309,15 +310,16 @@ export default function TherapistDashboard() {
             </TouchableOpacity>
           </View>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.filterRow}>
-            <TouchableOpacity style={s.filterChip} onPress={() => setShowCityModal(true)}>
+            <TouchableOpacity activeOpacity={1} style={s.filterChip} onPress={() => setShowCityModal(true)}>
               <Text style={s.filterChipText}>{selectedCity === 'Tất cả' ? t.city : selectedCity}</Text>
               <Feather name="chevron-down" size={14} color="#7B8086" />
             </TouchableOpacity>
-            <TouchableOpacity style={s.filterChip} onPress={() => setShowServiceModal(true)}>
+            <TouchableOpacity activeOpacity={1} style={s.filterChip} onPress={() => setShowServiceModal(true)}>
               <Text style={s.filterChipText}>{selectedService === ALL_SERVICE ? t.service : selectedService}</Text>
               <Feather name="chevron-down" size={14} color="#7B8086" />
             </TouchableOpacity>
             <TouchableOpacity
+              activeOpacity={1}
               style={[s.filterChip, onlyCompleted && s.filterChipActive]}
               onPress={() => setOnlyCompleted((prev) => !prev)}
             >
@@ -347,6 +349,7 @@ export default function TherapistDashboard() {
                 const active = city === selectedCity;
                 return (
                   <TouchableOpacity
+                    activeOpacity={1}
                     key={city}
                     style={s.modalRow}
                     onPress={() => {
@@ -374,6 +377,7 @@ export default function TherapistDashboard() {
                 const active = service === selectedService;
                 return (
                   <TouchableOpacity
+                    activeOpacity={1}
                     key={service}
                     style={s.modalRow}
                     onPress={() => {
