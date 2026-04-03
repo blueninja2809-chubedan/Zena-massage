@@ -22,17 +22,18 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { AppColors } from '@/constants/appColors';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 const COLORS = {
-  primary: '#E53935',
-  primaryDark: '#C62828',
-  primarySoft: '#FFCDD2',
-  bg: '#FFFFFF',
+  primary: AppColors.primaryDark,
+  primaryDark: AppColors.primaryDark,
+  primarySoft: AppColors.primarySoft,
+  bg: AppColors.white,
   card: '#FFFFFF',
-  text: '#111827',
-  muted: '#64748B',
-  border: '#E2E8F0',
+  text: AppColors.text,
+  muted: AppColors.textMuted,
+  border: AppColors.border,
 };
 
 const NATIONALITIES_VI = ['Việt Nam', 'Thái Lan', 'Hàn Quốc', 'Nhật Bản', 'Singapore', 'Khác'];
@@ -261,7 +262,11 @@ export function SignUpScreen({ onBack, onNavigateSignIn }: SignUpScreenProps) {
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
         {step === 'landing' && (
-          <LinearGradient colors={['#DCF5F2', '#FFFFFF']} style={styles.landingPad}>
+          <LinearGradient
+            colors={[AppColors.accentSoft, AppColors.primarySoft2, AppColors.bg, AppColors.white]}
+            locations={[0, 0.35, 0.72, 1]}
+            style={styles.landingPad}
+          >
             <Text style={styles.brand}>zena</Text>
             <Text style={styles.landingTitle}>{isEn ? 'Create account' : 'Đăng ký tài khoản'}</Text>
 
@@ -427,7 +432,7 @@ export function SignUpScreen({ onBack, onNavigateSignIn }: SignUpScreenProps) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: COLORS.bg },
+  container: { flex: 1, backgroundColor: AppColors.bgAlt },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -462,12 +467,14 @@ const styles = StyleSheet.create({
   stepRow: { flexDirection: 'row', justifyContent: 'center', gap: 8, marginBottom: 10 },
   stepDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: COLORS.border },
   stepDotActive: { width: 24, backgroundColor: COLORS.primary },
-  content: { paddingHorizontal: 16, paddingBottom: 36 },
+  content: { flexGrow: 1, paddingHorizontal: 16, paddingBottom: 36, backgroundColor: AppColors.bgAlt },
   landingPad: {
-    borderRadius: 16,
+    flex: 1,
+    borderRadius: 0,
     paddingHorizontal: 12,
     paddingVertical: 20,
     paddingBottom: 32,
+    backgroundColor: AppColors.bgAlt,
   },
   brand: {
     textAlign: 'center',
@@ -526,9 +533,9 @@ const styles = StyleSheet.create({
   subtitle: { marginTop: 6, fontSize: 14, color: COLORS.muted, lineHeight: 20, marginBottom: 14 },
   label: { fontSize: 14, fontWeight: '700', color: COLORS.text, marginBottom: 8, marginTop: 10 },
   input: {
-    backgroundColor: COLORS.primarySoft,
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: COLORS.border,
+    borderColor: '#D8E0EA',
     borderRadius: 12,
     paddingHorizontal: 14,
     paddingVertical: 13,
@@ -553,9 +560,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: COLORS.primarySoft,
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: COLORS.border,
+    borderColor: '#D8E0EA',
     borderRadius: 12,
     paddingHorizontal: 14,
     paddingVertical: 13,
@@ -587,9 +594,9 @@ const styles = StyleSheet.create({
   citySearchInput: {
     marginHorizontal: 18,
     marginBottom: 8,
-    backgroundColor: COLORS.primarySoft,
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: COLORS.border,
+    borderColor: '#D8E0EA',
     borderRadius: 12,
     paddingHorizontal: 14,
     paddingVertical: 10,

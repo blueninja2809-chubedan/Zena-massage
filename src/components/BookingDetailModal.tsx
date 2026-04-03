@@ -11,23 +11,25 @@ import {
     View,
 } from 'react-native';
 
+import { AppColors } from '@/constants/appColors';
+
 const COLORS = {
-  primary: '#E53935',
-  dark: '#C62828',
-  bg: '#FFFBFB',
-  text: '#1A1A1A',
-  lightText: '#4B5563',
-  success: '#2E7D32',
-  successBg: '#E8F5E9',
-  cancel: '#C62828',
-  cancelBg: '#FFEBEE',
+  primary: AppColors.primary,
+  dark: AppColors.primaryDark,
+  bg: AppColors.bg,
+  text: AppColors.text,
+  lightText: AppColors.textMuted,
+  success: AppColors.success,
+  successBg: AppColors.successBg,
+  cancel: AppColors.danger,
+  cancelBg: AppColors.dangerBg,
   pending: '#E65100',
   pendingBg: '#FFF3E0',
-  confirmed: '#C62828',
-  confirmedBg: '#FFCDD2',
-  divider: '#E8E8E8',
-  white: '#FFFFFF',
-  grey: '#F5F5F5',
+  confirmed: AppColors.primaryDark,
+  confirmedBg: AppColors.accentSoft,
+  divider: AppColors.border,
+  white: AppColors.white,
+  grey: AppColors.primarySoft2,
 };
 
 const translations = {
@@ -94,13 +96,13 @@ function StatusIllustration({ status }: { status: string }) {
 
   if (isCancelled) {
     iconName = 'x-circle';
-    bgColor = '#FFEBEE';
+    bgColor = AppColors.dangerBg;
   } else if (isPending) {
     iconName = 'clock';
     bgColor = '#FFF3E0';
   } else if (isConfirmed) {
     iconName = 'check-circle';
-    bgColor = '#FFCDD2';
+    bgColor = AppColors.accentSoft;
   } else if (isSuccess) {
     iconName = 'check-circle';
     bgColor = '#E8F5E9';
@@ -113,7 +115,7 @@ function StatusIllustration({ status }: { status: string }) {
         <View style={[styles.cloud, styles.cloudMedium]} />
         <View style={[styles.cloud, styles.cloudSmall, { marginLeft: 20 }]} />
       </View>
-      <View style={[styles.iconCircle, { backgroundColor: isCancelled ? '#E53935' : isSuccess ? '#43A047' : isPending ? '#EF6C00' : '#1E88E5' }]}>
+      <View style={[styles.iconCircle, { backgroundColor: isCancelled ? AppColors.danger : isSuccess ? '#43A047' : isPending ? '#EF6C00' : AppColors.accent }]}>
         <Feather name={iconName} size={60} color="#FFFFFF" />
       </View>
     </View>
@@ -173,10 +175,27 @@ export default function BookingDetailModal({
   let durationMinutes = 60;
   const timeParts = booking.time.split(' - ');
   if (timeParts.length === 2) {
-    const [startH, startM] = timeParts[0].split(':').map(Number);
-    const [endH, endM] = timeParts[1].split(':').map(Number);
-    durationMinutes = (endH * 60 + endM) - (startH * 60 + startM);
-    if (durationMinutes <= 0) durationMinutes = 60;
+    const left = timeParts[0].trim();
+    const right = timeParts[1].trim();
+
+    // Support both "14:00 - 15:30" and "08h - 10h" formats.
+    if (left.includes(':') && right.includes(':')) {
+      const [startH, startM] = left.split(':').map(Number);
+      const [endH, endM] = right.split(':').map(Number);
+      durationMinutes = (endH * 60 + endM) - (startH * 60 + startM);
+    } else {
+      const leftMatch = left.match(/(\d+)\s*h/i);
+      const rightMatch = right.match(/(\d+)\s*h/i);
+      const startH = leftMatch ? Number(leftMatch[1]) : NaN;
+      const endH = rightMatch ? Number(rightMatch[1]) : NaN;
+      if (!Number.isNaN(startH) && !Number.isNaN(endH)) {
+        // Handle wrap-around like "22h - 0h".
+        const diffHours = endH >= startH ? endH - startH : endH + 24 - startH;
+        durationMinutes = diffHours * 60;
+      }
+    }
+
+    if (!Number.isFinite(durationMinutes) || durationMinutes <= 0) durationMinutes = 60;
   }
 
   return (

@@ -22,6 +22,7 @@ import { useLanguage } from '@/contexts/LanguageContext';
 import { useUser } from '@/contexts/UserContext';
 import type { WalletTransaction } from '@/lib/supabaseService';
 import { createWithdrawalRequest, getOrCreateWallet, getWalletTransactions } from '@/lib/supabaseService';
+import { AppColors } from '@/constants/appColors';
 
 // —— Translations ——
 const TR: Record<OnboardingLanguage, Record<string, string>> = {
@@ -101,21 +102,21 @@ const TR: Record<OnboardingLanguage, Record<string, string>> = {
 
 // —— Colors (match app theme) ——
 const P = {
-  primary: '#E53935',
-  primaryDark: '#C62828',
-  bg: '#FFFBFB',
-  card: '#FFFFFF',
-  text: '#1A1A1A',
-  sub: '#4B5563',
-  muted: '#99D9D2',
-  line: '#C8E6C9',
-  accent: '#E53935',
-  success: '#1E3A5F',
-  successBg: '#E8F5E9',
+  primary: AppColors.primaryDark,
+  primaryDark: AppColors.primaryDark,
+  bg: AppColors.bg,
+  card: AppColors.white,
+  text: AppColors.text,
+  sub: AppColors.textMuted,
+  muted: AppColors.accentMuted,
+  line: AppColors.border,
+  accent: AppColors.accent,
+  success: AppColors.success,
+  successBg: AppColors.successBg,
   warn: '#E39A1A',
   warnBg: '#FFF8E1',
-  errorBg: '#FFEBEE',
-  error: '#C62828',
+  errorBg: AppColors.dangerBg,
+  error: AppColors.danger,
 };
 
 type FilterTab = 'all' | 'topup' | 'payment' | 'withdrawal' | 'earning';
@@ -136,15 +137,15 @@ function getTypeIcon(type: WalletTransaction['type']): { icon: keyof typeof Feat
     case 'topup':
       return { icon: 'arrow-down-circle', color: P.success, bg: P.successBg };
     case 'payment':
-      return { icon: 'shopping-cart', color: P.accent, bg: '#FFCDD2' };
+      return { icon: 'shopping-cart', color: P.accent, bg: AppColors.accentSoft };
     case 'earning':
       return { icon: 'dollar-sign', color: P.success, bg: P.successBg };
     case 'fee':
       return { icon: 'percent', color: P.warn, bg: P.warnBg };
     case 'refund':
-      return { icon: 'rotate-ccw', color: '#C62828', bg: '#FFCDD2' };
+      return { icon: 'rotate-ccw', color: AppColors.danger, bg: AppColors.primarySoft };
     case 'withdrawal':
-      return { icon: 'arrow-up-circle', color: P.accent, bg: '#FFCDD2' };
+      return { icon: 'arrow-up-circle', color: P.accent, bg: AppColors.accentSoft };
     default:
       return { icon: 'circle', color: P.sub, bg: P.bg };
   }
@@ -625,7 +626,7 @@ const s = StyleSheet.create({
     backgroundColor: P.card,
     borderRadius: 14,
     padding: 14,
-    shadowColor: '#E53935',
+    shadowColor: AppColors.primaryDark,
     shadowOpacity: 0.04,
     shadowRadius: 6,
     shadowOffset: { width: 0, height: 2 },

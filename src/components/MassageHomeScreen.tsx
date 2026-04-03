@@ -1,6 +1,8 @@
 import { DEFAULT_CITY, SERVICE_TYPES, VIETNAM_PROVINCES } from '@/constants/bookingFilters';
+import { AppColors } from '@/constants/appColors';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useUser } from '@/contexts/UserContext';
+import { useTabletLayout } from '@/hooks/use-tablet-layout';
 import { getTherapists } from '@/lib/supabaseService';
 import type { Therapist } from '@/lib/types';
 import { useRouter } from 'expo-router';
@@ -18,24 +20,24 @@ import {
     TouchableOpacity,
     View
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import TherapistDetailScreen from './TherapistDetailScreen';
 
 const TAGS = ['Mới cập nhật', 'Mới đến', 'Chất lượng'];
 
 const TAG_COLORS: Record<string, { bg: string; text: string }> = {
-  'Chất lượng': { bg: '#E53935', text: '#fff' },
-  'Mới đến': { bg: '#C62828', text: '#fff' },
-  'Mới cập nhật': { bg: '#E53935', text: '#fff' },
+  'Chất lượng': { bg: AppColors.primaryDark, text: '#fff' },
+  'Mới đến': { bg: AppColors.accent, text: '#fff' },
+  'Mới cập nhật': { bg: AppColors.primary, text: '#1F1B16' },
 };
 
 const COLORS = {
-  green: '#E53935',
-  greenLight: '#FFCDD2',
-  bg: '#FFFBFB',
+  green: AppColors.primaryDark,
+  greenLight: AppColors.primarySoft,
+  bg: AppColors.bg,
   white: '#fff',
-  text: '#1A1A1A',
-  subText: '#666',
+  text: AppColors.text,
+  subText: AppColors.textMuted,
   border: '#E0E0E0',
   gold: '#F5A623',
   goldBg: '#FFF8E1',
@@ -51,10 +53,17 @@ export default function MassageHomeScreen({
   onChangeCity?: (city: string) => void | Promise<void>;
 } = {}) {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { user, setUser } = useUser();
   const { language } = useLanguage();
+  const tabletLayout = useTabletLayout();
   const isVipMember = !!user?.isVipMember;
   const isEn = language === 'en';
+  const isTestMode =
+    process.env.EXPO_PUBLIC_TEST_MODE === 'true' ||
+    process.env.EXPO_PUBLIC_TEST_MODE === '1' ||
+    // eslint-disable-next-line no-undef
+    (typeof __DEV__ !== 'undefined' && __DEV__);
 
   const [therapists, setTherapists] = useState<Therapist[]>([]);
   const [loading, setLoading] = useState(true);
@@ -107,6 +116,11 @@ export default function MassageHomeScreen({
     if (item.workingCity?.trim()) {
       return item.workingCity.trim();
     }
+    // Mock therapists don't contain `workingCity`, so keep them visible for testing.
+    if (item.id.startsWith('mock-')) return selectedCity;
+    // In test mode our mock therapists don't contain `workingCity`,
+    // so keep them visible by assigning them to the currently selected city.
+    if (isTestMode) return selectedCity;
     const hash = item.id.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0);
     return VIETNAM_PROVINCES[hash % VIETNAM_PROVINCES.length];
   };
@@ -273,12 +287,13 @@ export default function MassageHomeScreen({
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={["top"]}>
+    <SafeAreaView style={styles.container} edges={['left', 'right', 'bottom']}>
       <StatusBar barStyle="dark-content" backgroundColor={COLORS.white} />
+      <View style={tabletLayout.contentContainer}>
 
       {/* Header */}
-      <View style={styles.screenTop}>
-      <View style={styles.header}>
+      <View style={[styles.screenTop, { paddingTop: Math.max(insets.top, 10) }]}>
+      <View style={[styles.header, { paddingHorizontal: tabletLayout.horizontalPadding - 4 }]}>
         <TouchableOpacity onPress={() => onClose ? onClose() : router.back()} style={styles.backBtn}>
           <Text style={styles.backIcon}>←</Text>
         </TouchableOpacity>
@@ -303,7 +318,7 @@ export default function MassageHomeScreen({
 
       {/* VIP Banner */}
       {!isVipMember ? (
-        <View style={styles.vipBanner}>
+        <View style={[styles.vipBanner, { marginHorizontal: tabletLayout.horizontalPadding - 4 }]}>
           <Text style={styles.vipCrown}>👑</Text>
           <Text style={styles.vipText}>{isEn ? 'Enjoy exclusive benefits' : 'Tận hưởng những quyền lợi đặc biệt'}</Text>
           <TouchableOpacity style={styles.upgradeBtn}>
@@ -314,7 +329,7 @@ export default function MassageHomeScreen({
       </View>
 
       {/* Filter chips */}
-      <View style={styles.filterRow}>
+      <View style={[styles.filterRow, { paddingHorizontal: tabletLayout.horizontalPadding - 4 }]}>
         {/* Filter icon chip */}
         <TouchableOpacity
           style={[styles.filterIconChip, hasActiveFilters && styles.filterChipActive]}
@@ -368,14 +383,15 @@ export default function MassageHomeScreen({
           data={filteredTherapists}
           keyExtractor={(item) => item.id}
           renderItem={renderTherapist}
-          contentContainerStyle={styles.listContent}
+          contentContainerStyle={[styles.listContent, { paddingHorizontal: tabletLayout.horizontalPadding - 4 }]}
           showsVerticalScrollIndicator={false}
         />
       )}
+      </View>
 
       <Modal visible={showCityModal} transparent animationType="slide" onRequestClose={() => setShowCityModal(false)}>
         <Pressable style={styles.modalOverlay} onPress={() => setShowCityModal(false)}>
-          <Pressable style={styles.modalSheet} onPress={() => {}}>
+          <Pressable style={[styles.modalSheet, tabletLayout.isTablet && styles.tabletModalSheet]} onPress={() => {}}>
             <View style={styles.modalHandle} />
             <Text style={styles.modalTitle}>{isEn ? 'Select province/city' : 'Chọn tỉnh/thành phố'}</Text>
             <View style={styles.citySearchWrap}>
@@ -418,7 +434,7 @@ export default function MassageHomeScreen({
       {/* ===== Filter Modal ===== */}
       <Modal visible={showFilterModal} transparent animationType="slide">
         <Pressable style={styles.modalOverlay} onPress={() => setShowFilterModal(false)}>
-          <Pressable style={styles.modalSheet} onPress={() => {}}>
+          <Pressable style={[styles.modalSheet, tabletLayout.isTablet && styles.tabletModalSheet]} onPress={() => {}}>
             {/* Handle */}
             <View style={styles.modalHandle} />
             <Text style={styles.modalTitle}>{isEn ? 'Filters' : 'Bộ lọc'}</Text>
@@ -510,7 +526,7 @@ export default function MassageHomeScreen({
       {/* ===== Service Type Modal ===== */}
       <Modal visible={showServiceModal} transparent animationType="slide">
         <Pressable style={styles.modalOverlay} onPress={() => setShowServiceModal(false)}>
-          <Pressable style={styles.modalSheet} onPress={() => {}}>
+          <Pressable style={[styles.modalSheet, tabletLayout.isTablet && styles.tabletModalSheet]} onPress={() => {}}>
             <View style={styles.modalHandle} />
             <Text style={styles.modalTitle}>{isEn ? 'Service type' : 'Loại dịch vụ'}</Text>
             <ScrollView showsVerticalScrollIndicator={false}>
@@ -562,7 +578,6 @@ const styles = StyleSheet.create({
   },
 
   screenTop: {
-    paddingTop: 6,
     paddingBottom: 10,
     backgroundColor: COLORS.white,
     borderBottomLeftRadius: 20,
@@ -865,6 +880,11 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     paddingBottom: 24,
     maxHeight: '85%',
+  },
+  tabletModalSheet: {
+    width: '70%',
+    maxWidth: 680,
+    alignSelf: 'center',
   },
   citySearchWrap: {
     marginBottom: 10,

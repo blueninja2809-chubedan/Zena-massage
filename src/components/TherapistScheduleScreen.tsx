@@ -25,6 +25,7 @@ import WalletScreen from '@/components/WalletScreen';
 import { useBookings } from '@/contexts/BookingsContext';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useUser } from '@/contexts/UserContext';
+import { AppColors } from '@/constants/appColors';
 import { getOrCreateWallet, getTherapistShifts, saveTherapistShifts } from '@/lib/supabaseService';
 
 const translations: Record<OnboardingLanguage, Record<string, string>> = {
@@ -75,14 +76,14 @@ const translations: Record<OnboardingLanguage, Record<string, string>> = {
 };
 
 const C = {
-  bg: '#FFFBFB',
-  card: '#FFFFFF',
-  text: '#1A1A1A',
-  sub: '#4B5563',
+  bg: AppColors.bg,
+  card: AppColors.white,
+  text: AppColors.text,
+  sub: AppColors.textMuted,
   line: '#E2E8F0',
-  accent: '#E53935',
-  accentSoft: '#FFCDD2',
-  slotBg: '#FFCDD2',
+  accent: AppColors.primaryDark,
+  accentSoft: AppColors.primarySoft,
+  slotBg: AppColors.accentSoft,
 };
 
 const supportChannels = [

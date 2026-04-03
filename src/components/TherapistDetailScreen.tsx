@@ -16,6 +16,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { AppColors } from '@/constants/appColors';
 import BookingConfirmScreen from './BookingConfirmScreen';
 
 const SCREEN_HEIGHT = Dimensions.get('window').height;
@@ -33,7 +34,7 @@ function getTherapistPhotos(therapist: Therapist): string[] {
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 const COLORS = {
-  green: '#C62828',
+  green: AppColors.primaryDark,
   greenLight: '#E8F5EE',
   greenBorder: '#A8D5BA',
   bg: '#F5F5F5',

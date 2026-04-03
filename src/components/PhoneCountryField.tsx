@@ -1,3 +1,4 @@
+import { AppColors } from '@/constants/appColors';
 import { COUNTRY_DIAL_LIST, type CountryDial } from '@/constants/countryDialData';
 import React, { useMemo, useState } from 'react';
 import {
@@ -131,9 +132,9 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F8FAFC',
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: '#D8E0EA',
     borderRadius: 16,
     paddingLeft: 6,
     paddingRight: 14,
@@ -213,5 +214,5 @@ const styles = StyleSheet.create({
   },
   listFlag: { fontSize: 22 },
   listName: { flex: 1, fontSize: 16, color: '#111827' },
-  listCode: { fontSize: 15, fontWeight: '700', color: '#C62828' },
+  listCode: { fontSize: 15, fontWeight: '700', color: AppColors.primaryDark },
 });

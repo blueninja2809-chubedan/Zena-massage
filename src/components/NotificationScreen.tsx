@@ -1,16 +1,17 @@
+import { AppColors } from '@/constants/appColors';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useUser } from '@/contexts/UserContext';
 import { getNotifications, markNotificationAsRead } from '@/lib/supabaseService';
 import type { Notification } from '@/lib/types';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-    FlatList,
-    ScrollView,
-    StatusBar,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  FlatList,
+  Pressable,
+  ScrollView,
+  StatusBar,
+  StyleSheet,
+  Text,
+  View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -49,7 +50,7 @@ const COLORS = {
 };
 
 const NOTIF_ICON: Record<Notification['type'], { emoji: string; bg: string; color: string }> = {
-  booking: { emoji: '📋', bg: '#FFCDD2', color: '#C62828' },
+  booking: { emoji: '📋', bg: AppColors.primarySoft, color: AppColors.primaryDark },
   promotion: { emoji: '🎁', bg: '#FFF3E0', color: '#F57C00' },
   reminder: { emoji: '⏰', bg: '#FFF8E1', color: '#FFA000' },
   review: { emoji: '⭐', bg: '#FFFDE7', color: '#F9A825' },
@@ -126,10 +127,9 @@ export default function NotificationScreen({ onClose }: { onClose: () => void })
     const body = language === 'en' ? item.messageEn || item.message : item.message;
     const timeText = new Date(item.createdAt).toLocaleString(language === 'en' ? 'en-US' : 'vi-VN');
     return (
-      <TouchableOpacity
+      <Pressable
         key={item.id}
         style={[styles.notifCard, !item.isRead && styles.notifUnread]}
-        activeOpacity={0.7}
         onPress={() => handleTapNotification(item.id)}
       >
         <View style={[styles.notifIconWrap, { backgroundColor: icon.bg }]}>
@@ -145,24 +145,24 @@ export default function NotificationScreen({ onClose }: { onClose: () => void })
           <Text style={styles.notifText} numberOfLines={2}>{body}</Text>
           <Text style={styles.notifTime}>{timeText}</Text>
         </View>
-      </TouchableOpacity>
+      </Pressable>
     );
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView style={styles.container} edges={['top', 'left', 'right', 'bottom']}>
       <StatusBar barStyle="dark-content" backgroundColor={COLORS.bg} />
 
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backBtn} onPress={onClose}>
+        <Pressable style={styles.backBtn} onPress={onClose} hitSlop={12}>
           <Text style={styles.backIcon}>←</Text>
-        </TouchableOpacity>
+        </Pressable>
         <Text style={styles.headerTitle}>{strings.title}</Text>
         {unreadCount > 0 ? (
-          <TouchableOpacity onPress={handleMarkAllRead} style={styles.markReadBtn}>
+          <Pressable onPress={handleMarkAllRead} style={styles.markReadBtn} hitSlop={8}>
             <Text style={styles.markReadText}>{strings.markAllRead}</Text>
-          </TouchableOpacity>
+          </Pressable>
         ) : (
           <View style={{ width: 80 }} />
         )}
@@ -179,11 +179,10 @@ export default function NotificationScreen({ onClose }: { onClose: () => void })
                 return n.type === tab.key && !n.isRead;
               }).length;
           return (
-            <TouchableOpacity
+            <Pressable
               key={tab.key}
               style={[styles.tabChip, isActive && styles.tabChipActive]}
               onPress={() => setActiveTab(tab.key)}
-              activeOpacity={0.7}
             >
               <Text style={[styles.tabLabel, isActive && styles.tabLabelActive]}>{tab.label}</Text>
               {count > 0 && (
@@ -191,7 +190,7 @@ export default function NotificationScreen({ onClose }: { onClose: () => void })
                   <Text style={[styles.tabBadgeText, isActive && styles.tabBadgeTextActive]}>{count}</Text>
                 </View>
               )}
-            </TouchableOpacity>
+            </Pressable>
           );
         })}
       </ScrollView>
@@ -228,7 +227,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingVertical: 14,
+    paddingTop: 6,
+    paddingBottom: 10,
     borderBottomWidth: 1,
     borderBottomColor: COLORS.border,
     backgroundColor: '#FFFFFF',
@@ -252,6 +252,7 @@ const styles = StyleSheet.create({
   markReadBtn: {
     paddingHorizontal: 12,
     paddingVertical: 6,
+    borderRadius: 10,
   },
   markReadText: {
     fontSize: 13,
@@ -366,7 +367,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#F0F1F3',
   },
   tabChipActive: {
-    backgroundColor: '#E53935',
+    backgroundColor: AppColors.primaryDark,
   },
   tabLabel: {
     fontSize: 13,

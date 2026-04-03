@@ -24,6 +24,7 @@ import { useLanguage } from '@/contexts/LanguageContext';
 import { useUser } from '@/contexts/UserContext';
 import { checkPayOSPaymentStatus, createPayOSPayment } from '@/lib/payosService';
 import type { WalletTransaction } from '@/lib/supabaseService';
+import { AppColors } from '@/constants/appColors';
 import { getOrCreateWallet, getWalletTransactions, walletTopUp } from '@/lib/supabaseService';
 
 const { width: SCREEN_W } = Dimensions.get('window');
@@ -114,18 +115,18 @@ const TR: Record<OnboardingLanguage, Record<string, string>> = {
 
 // ── Color palette (matches home screen) ──
 const P = {
-  primary: '#E53935',
-  primaryDark: '#C62828',
-  primaryLight: '#EF5350',
-  bg: '#FFFBFB',
-  card: '#FFFFFF',
-  text: '#1A1A1A',
-  sub: '#4B5563',
+  primary: AppColors.primaryDark,
+  primaryDark: AppColors.primaryDark,
+  primaryLight: AppColors.primary,
+  bg: AppColors.bg,
+  card: AppColors.white,
+  text: AppColors.text,
+  sub: AppColors.textMuted,
   muted: '#9E8585',
   line: '#E2E8F0',
-  accent: '#E53935',
-  success: '#1E3A5F',
-  successBg: '#E8F5E9',
+  accent: AppColors.accent,
+  success: AppColors.success,
+  successBg: AppColors.successBg,
   warn: '#E39A1A',
   warnBg: '#FFF8E1',
   disabled: '#E0EFED',
@@ -578,7 +579,7 @@ const s = StyleSheet.create({
     borderRadius: 16,
     padding: 16,
     marginBottom: 16,
-    shadowColor: '#E53935',
+    shadowColor: AppColors.primaryDark,
     shadowOpacity: 0.04,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 2 },

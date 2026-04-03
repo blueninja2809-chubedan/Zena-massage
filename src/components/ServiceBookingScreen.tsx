@@ -20,6 +20,7 @@ import {
 import QRCode from 'react-native-qrcode-svg';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { AppColors } from '@/constants/appColors';
 import { useUser } from '@/contexts/UserContext';
 import { checkPayOSPaymentStatus, createPayOSPayment } from '@/lib/payosService';
 import {
@@ -34,11 +35,11 @@ import {
 } from '@/lib/supabaseService';
 
 const P = {
-  primary: '#C62828',
-  primaryLight: '#E53935',
-  bg: '#F4F4F5',
-  card: '#FFFFFF',
-  text: '#1A1A1A',
+  primary: AppColors.primaryDark,
+  primaryLight: AppColors.primary,
+  bg: AppColors.bg,
+  card: AppColors.white,
+  text: AppColors.text,
   sub: '#64748B',
   muted: '#94A3B8',
   line: '#E2E8F0',
@@ -66,6 +67,11 @@ function fmtDateVi(d: Date) {
 export default function ServiceBookingScreen() {
   const router = useRouter();
   const { user, isLoading: userLoading } = useUser();
+  const isTestMode =
+    process.env.EXPO_PUBLIC_TEST_MODE === 'true' ||
+    process.env.EXPO_PUBLIC_TEST_MODE === '1' ||
+    // eslint-disable-next-line no-undef
+    (typeof __DEV__ !== 'undefined' && __DEV__);
   const params = useLocalSearchParams<{
     serviceId?: string;
     name?: string;
@@ -86,13 +92,14 @@ export default function ServiceBookingScreen() {
   const image = params.image ? decodeURIComponent(String(params.image)) : '';
   const address = params.address ? decodeURIComponent(String(params.address)) : '';
 
-  const userId = user?.authUid;
+  // In test/dev we allow booking without login.
+  const userId = user?.authUid ?? (isTestMode ? 'test-user' : undefined);
 
   const [scheduledAt, setScheduledAt] = useState(() => tomorrowAt(10, 0));
   const [showSchedule, setShowSchedule] = useState(false);
   const [payKind, setPayKind] = useState<PayKind>('glow');
   const [balance, setBalance] = useState(0);
-  const [zalo, setZalo] = useState('');
+  const [zalo, setZalo] = useState(() => (isTestMode ? '0901234567' : ''));
   const [loadingWallet, setLoadingWallet] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
@@ -174,6 +181,7 @@ export default function ServiceBookingScreen() {
 
   const buildBookingPayload = () => ({
     kind: 'location_service',
+    customerUserId: userId,
     customerName: user?.displayName || 'Khách hàng',
     customerPhone: zalo.trim(),
     therapistId: 'location',
@@ -330,7 +338,7 @@ export default function ServiceBookingScreen() {
     );
   }
 
-  if (!user?.authUid) {
+  if (!user?.authUid && !isTestMode) {
     return (
       <SafeAreaView style={[styles.safe, styles.centered]} edges={['top']}>
         <StatusBar barStyle="dark-content" />
@@ -673,7 +681,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
   },
   topupBtnText: { color: '#fff', fontWeight: '800', fontSize: 13 },
-  req: { color: '#E53935' },
+  req: { color: AppColors.danger },
   zaloRow: {
     flexDirection: 'row',
     alignItems: 'center',

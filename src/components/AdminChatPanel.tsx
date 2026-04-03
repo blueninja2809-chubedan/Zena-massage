@@ -17,13 +17,14 @@ import {
     TouchableOpacity,
     View
 } from 'react-native';
+import { AppColors } from '@/constants/appColors';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 const COLORS = {
-  bg: '#F5F5F5',
-  white: '#FFFFFF',
-  primary: '#E53935',
-  danger: '#E53935',
+  bg: AppColors.bg,
+  white: AppColors.white,
+  primary: AppColors.primaryDark,
+  danger: AppColors.danger,
   success: '#43A047',
   text: '#1A1A1A',
   subText: '#6B7280',

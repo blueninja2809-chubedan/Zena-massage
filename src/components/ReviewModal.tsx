@@ -1,6 +1,7 @@
 import type { SharedBooking } from '@/contexts/BookingsContext';
 import { useBookings } from '@/contexts/BookingsContext';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { AppColors } from '@/constants/appColors';
 import Feather from '@expo/vector-icons/Feather';
 import React, { useState } from 'react';
 import {
@@ -17,11 +18,11 @@ import {
 } from 'react-native';
 
 const COLORS = {
-  primary: '#E53935',
-  text: '#1A1A1A',
-  lightText: '#4B5563',
-  bg: '#F5F5F5',
-  cardBg: '#FFFBFB',
+  primary: AppColors.primaryDark,
+  text: AppColors.text,
+  lightText: AppColors.textMuted,
+  bg: AppColors.bg,
+  cardBg: AppColors.white,
   white: '#FFFFFF',
   divider: '#E8E8E8',
   gold: '#FFA000',
@@ -120,10 +121,25 @@ export default function ReviewModal({ visible, booking, onClose }: ReviewModalPr
   let durationMinutes = 60;
   const timeParts = booking.time.split(' - ');
   if (timeParts.length === 2) {
-    const [startH, startM] = timeParts[0].split(':').map(Number);
-    const [endH, endM] = timeParts[1].split(':').map(Number);
-    durationMinutes = (endH * 60 + endM) - (startH * 60 + startM);
-    if (durationMinutes <= 0) durationMinutes = 60;
+    const left = timeParts[0].trim();
+    const right = timeParts[1].trim();
+
+    if (left.includes(':') && right.includes(':')) {
+      const [startH, startM] = left.split(':').map(Number);
+      const [endH, endM] = right.split(':').map(Number);
+      durationMinutes = (endH * 60 + endM) - (startH * 60 + startM);
+    } else {
+      const leftMatch = left.match(/(\d+)\s*h/i);
+      const rightMatch = right.match(/(\d+)\s*h/i);
+      const startH = leftMatch ? Number(leftMatch[1]) : NaN;
+      const endH = rightMatch ? Number(rightMatch[1]) : NaN;
+      if (!Number.isNaN(startH) && !Number.isNaN(endH)) {
+        const diffHours = endH >= startH ? endH - startH : endH + 24 - startH;
+        durationMinutes = diffHours * 60;
+      }
+    }
+
+    if (!Number.isFinite(durationMinutes) || durationMinutes <= 0) durationMinutes = 60;
   }
 
   return (

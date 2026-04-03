@@ -11,6 +11,12 @@ const API_BASE_URL = (process.env.EXPO_PUBLIC_SMS_API_BASE_URL ?? '').replace(/\
 const API_KEY = process.env.EXPO_PUBLIC_SMS_API_KEY ?? '';
 const API_TIMEOUT_MS = 15000;
 
+const IS_TEST_MODE =
+  process.env.EXPO_PUBLIC_TEST_MODE === 'true' ||
+  process.env.EXPO_PUBLIC_TEST_MODE === '1' ||
+  // eslint-disable-next-line no-undef
+  (typeof __DEV__ !== 'undefined' && __DEV__);
+
 export interface PayOSPaymentResult {
   orderCode: number;
   checkoutUrl: string;
@@ -67,6 +73,18 @@ export async function createPayOSPayment(
   description?: string,
   bookingId?: string,
 ): Promise<{ success: boolean; data?: PayOSPaymentResult; message?: string }> {
+  if (IS_TEST_MODE) {
+    const orderCode = Math.floor(Date.now() / 1000);
+    return {
+      success: true,
+      data: {
+        orderCode,
+        checkoutUrl: `https://example.com/payos/test?bookingId=${encodeURIComponent(String(bookingId ?? ''))}`,
+        qrCode: `TEST_QR_${orderCode}`,
+        amount,
+      },
+    };
+  }
   const body: Record<string, unknown> = { userId, amount, description };
   if (bookingId) body.bookingId = bookingId;
   return payosApi<PayOSPaymentResult>('/api/payos/create-payment', {
@@ -78,6 +96,18 @@ export async function createPayOSPayment(
 export async function checkPayOSPaymentStatus(
   orderCode: number,
 ): Promise<{ success: boolean; data?: PayOSPaymentStatus; message?: string }> {
+  if (IS_TEST_MODE) {
+    // In test mode we assume it is instantly paid.
+    return {
+      success: true,
+      data: {
+        orderCode,
+        status: 'PAID',
+        amount: 0,
+        amountPaid: 0,
+      },
+    };
+  }
   return payosApi<PayOSPaymentStatus>(`/api/payos/payment-status/${orderCode}`, {
     method: 'GET',
   });

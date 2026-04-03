@@ -1,6 +1,8 @@
 import { useBookings } from '@/contexts/BookingsContext';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useUser } from '@/contexts/UserContext';
+import { AppColors } from '@/constants/appColors';
+import { useTabletLayout } from '@/hooks/use-tablet-layout';
 import { getServices } from '@/lib/supabaseService';
 import type { Service } from '@/lib/types';
 import React, { useEffect, useState } from 'react';
@@ -15,6 +17,8 @@ import {
     View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+
+const EXPLORE_HEADER = AppColors.primaryDark;
 
 const translations = {
   vi: {
@@ -48,6 +52,7 @@ export default function ExploreScreenComponent() {
   const strings = translations[language as keyof typeof translations] || translations.vi;
   const { bookings } = useBookings();
   const { user } = useUser();
+  const tabletLayout = useTabletLayout();
 
   const activeBookingCount = bookings.filter(
     (b) =>
@@ -131,9 +136,10 @@ export default function ExploreScreenComponent() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
-      <StatusBar barStyle="light-content" backgroundColor="#1B6B3A" />
+      <StatusBar barStyle="light-content" backgroundColor={EXPLORE_HEADER} />
+      <View style={tabletLayout.contentContainer}>
 
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingHorizontal: tabletLayout.horizontalPadding }]}>
         <Text style={styles.title}>{strings.explore}</Text>
 
         {activeBookingCount > 0 && (
@@ -165,7 +171,7 @@ export default function ExploreScreenComponent() {
         data={categories}
         keyExtractor={(item) => item.id}
         showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.categoriesContainer}
+        contentContainerStyle={[styles.categoriesContainer, { paddingHorizontal: tabletLayout.horizontalPadding }]}
         renderItem={({ item }) => (
           <TouchableOpacity
             style={[
@@ -190,7 +196,7 @@ export default function ExploreScreenComponent() {
 
       {loading ? (
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#A8D5BA" />
+          <ActivityIndicator size="large" color={AppColors.accentMuted} />
           <Text style={styles.loadingText}>{strings.loading}</Text>
         </View>
       ) : filteredServices.length === 0 ? (
@@ -202,10 +208,11 @@ export default function ExploreScreenComponent() {
           data={filteredServices}
           keyExtractor={(item) => item.id}
           renderItem={renderServiceCard}
-          contentContainerStyle={styles.listContainer}
+          contentContainerStyle={[styles.listContainer, { paddingHorizontal: tabletLayout.horizontalPadding }]}
           showsVerticalScrollIndicator={false}
         />
       )}
+      </View>
     </SafeAreaView>
   );
 }
@@ -213,7 +220,7 @@ export default function ExploreScreenComponent() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#1B6B3A',
+    backgroundColor: EXPLORE_HEADER,
   },
   header: {
     paddingHorizontal: 16,
@@ -259,7 +266,7 @@ const styles = StyleSheet.create({
   bookingBadgeText: {
     fontSize: 13,
     fontWeight: '800',
-    color: '#1B6B3A',
+    color: EXPLORE_HEADER,
   },
   searchContainer: {
     flexDirection: 'row',
@@ -303,7 +310,7 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.7)',
   },
   categoryButtonTextActive: {
-    color: '#1B6B3A',
+    color: EXPLORE_HEADER,
   },
   listContainer: {
     paddingHorizontal: 16,
@@ -335,7 +342,7 @@ const styles = StyleSheet.create({
   },
   serviceCategory: {
     fontSize: 12,
-    color: '#A8D5BA',
+    color: AppColors.accentMuted,
     fontWeight: '600',
     textTransform: 'capitalize',
   },
@@ -363,7 +370,7 @@ const styles = StyleSheet.create({
   },
   duration: {
     fontSize: 12,
-    color: '#A8D5BA',
+    color: AppColors.accentMuted,
     fontWeight: '500',
     marginBottom: 4,
   },

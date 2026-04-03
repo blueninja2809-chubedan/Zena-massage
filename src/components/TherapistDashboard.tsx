@@ -20,6 +20,7 @@ import type { SharedBooking } from '@/contexts/BookingsContext';
 import { useBookings } from '@/contexts/BookingsContext';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useUser } from '@/contexts/UserContext';
+import { AppColors } from '@/constants/appColors';
 import { checkTherapistMinBalance, getTherapistAvailability, updateTherapistAvailability } from '@/lib/supabaseService';
 
 const translations: Record<OnboardingLanguage, Record<string, string>> = {
@@ -74,17 +75,17 @@ const translations: Record<OnboardingLanguage, Record<string, string>> = {
 };
 
 const C = {
-  bg: '#FFFBFB',
-  card: '#FFFFFF',
-  text: '#1A1A1A',
-  sub: '#4B5563',
-  line: '#C8E6C9',
-  accent: '#E53935',
-  accentSoft: '#FFCDD2',
-  chip: '#FFCDD2',
+  bg: AppColors.bg,
+  card: AppColors.white,
+  text: AppColors.text,
+  sub: AppColors.textMuted,
+  line: AppColors.border,
+  accent: AppColors.primaryDark,
+  accentSoft: AppColors.primarySoft,
+  chip: AppColors.accentSoft,
   urgent: '#F2A51D',
-  complete: '#EF5350',
-  info: '#E53935',
+  complete: AppColors.accent,
+  info: AppColors.primary,
 };
 const ALL_SERVICE = 'Tất cả';
 

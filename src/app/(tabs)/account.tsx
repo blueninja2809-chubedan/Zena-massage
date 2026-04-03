@@ -3,8 +3,10 @@ import { SignInScreen } from '@/components/SignInScreen';
 import { SignUpScreen } from '@/components/SignUpScreen';
 import VipMembershipScreen from '@/components/VipMembershipScreen';
 import { SERVICE_TYPES, VIETNAM_PROVINCES } from '@/constants/bookingFilters';
+import { AppColors } from '@/constants/appColors';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { UserData, useUser } from '@/contexts/UserContext';
+import { useTabletLayout } from '@/hooks/use-tablet-layout';
 import { checkTherapistMinBalance, createPartnerApplication, getTherapistAvailability, updateTherapistAvailability } from '@/lib/supabaseService';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
@@ -26,17 +28,17 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 const COLORS = {
-  primary: '#E53935',
-  primaryDark: '#C62828',
-  primaryLight: '#FFCDD2',
+  primary: AppColors.primaryDark,
+  primaryDark: AppColors.primaryDark,
+  primaryLight: AppColors.primarySoft,
   gold: '#F5A623',
   goldLight: '#FFF8E1',
-  bg: '#F5F5F5',
-  white: '#fff',
-  text: '#1A1A1A',
-  subText: '#666',
-  border: '#E8E8E8',
-  red: '#E53935',
+  bg: AppColors.bg,
+  white: AppColors.white,
+  text: AppColors.text,
+  subText: AppColors.textMuted,
+  border: AppColors.border,
+  red: AppColors.danger,
 };
 
 const VN_PROVINCES = VIETNAM_PROVINCES.map((p) => (p === 'TP.HCM' ? 'TP. Hồ Chí Minh' : p));
@@ -114,6 +116,7 @@ export default function AccountScreen() {
   >('account');
   const [country] = useState({ code: 'VN', label: 'Việt Nam', flag: '\uD83C\uDDFB\uD83C\uDDF3' });
   const [profileVisible, setProfileVisible] = useState(true);
+  const tabletLayout = useTabletLayout();
 
   useEffect(() => {
     if (user?.authUid && user?.role === 'therapist') {
@@ -233,7 +236,7 @@ export default function AccountScreen() {
       <Image
         source={require('@/assets/images/promo-reward-banner.png')}
         style={s.promoRewardBannerImg}
-        resizeMode="cover"
+        resizeMode={tabletLayout.isTablet ? 'contain' : 'cover'}
       />
     </TouchableOpacity>
   );
@@ -243,7 +246,7 @@ export default function AccountScreen() {
       <Image
         source={require('@/assets/images/ktv2.png')}
         style={s.promoRewardBannerImg}
-        resizeMode="cover"
+        resizeMode={tabletLayout.isTablet ? 'contain' : 'cover'}
       />
     </TouchableOpacity>
   ) : (
@@ -251,7 +254,7 @@ export default function AccountScreen() {
       <Image
         source={require('@/assets/images/promo-partner-banner.png')}
         style={s.promoRewardBannerImg}
-        resizeMode="cover"
+        resizeMode={tabletLayout.isTablet ? 'contain' : 'cover'}
       />
     </TouchableOpacity>
   );
@@ -289,7 +292,7 @@ export default function AccountScreen() {
               <View style={s.vipBadge}><Text style={s.vipBadgeText}>VIP</Text></View>
             </TouchableOpacity>
 
-            <View style={s.promoRow}>
+            <View style={[s.promoRow, tabletLayout.isTablet && s.promoRowTablet]}>
               {partnerPromoCard}
               {rewardPromoCard}
             </View>
@@ -340,7 +343,7 @@ export default function AccountScreen() {
             </TouchableOpacity>
 
             {/* Promo cards */}
-            <View style={s.promoRow}>
+            <View style={[s.promoRow, tabletLayout.isTablet && s.promoRowTablet]}>
               {partnerPromoCard}
               {rewardPromoCard}
             </View>
@@ -1299,7 +1302,7 @@ const s = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    shadowColor: '#C62828',
+    shadowColor: AppColors.primaryDark,
     shadowOpacity: 0.05,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 2 },
@@ -1312,7 +1315,7 @@ const s = StyleSheet.create({
     width: 52,
     height: 52,
     borderRadius: 16,
-    backgroundColor: '#FFCDD2',
+    backgroundColor: AppColors.primarySoft,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1320,7 +1323,7 @@ const s = StyleSheet.create({
   businessHeaderTitle: { fontSize: 22, fontWeight: '800', color: '#0A2540' },
   businessContent: { paddingHorizontal: 16, paddingBottom: 36 },
   businessLabel: { marginTop: 10, marginBottom: 8, color: '#0A2540', fontSize: 18, fontWeight: '700' },
-  requiredStar: { color: '#E53935', fontSize: 16, fontWeight: '800' },
+  requiredStar: { color: AppColors.danger, fontSize: 16, fontWeight: '800' },
   businessImageGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   businessImageSlot: {
     width: '31.5%',
@@ -1344,7 +1347,7 @@ const s = StyleSheet.create({
     width: 24,
     height: 24,
     borderRadius: 12,
-    backgroundColor: '#C62828',
+    backgroundColor: AppColors.primaryDark,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1401,7 +1404,7 @@ const s = StyleSheet.create({
   },
   businessCityChipActive: {
     borderColor: COLORS.primary,
-    backgroundColor: '#FFCDD2',
+    backgroundColor: AppColors.primarySoft,
   },
   businessCityChipText: {
     fontSize: 13,
@@ -1457,7 +1460,7 @@ const s = StyleSheet.create({
     backgroundColor: '#FFF',
   },
   cityOptionRowActive: {
-    backgroundColor: '#FFCDD2',
+    backgroundColor: AppColors.primarySoft,
     borderColor: COLORS.primary,
   },
   cityOptionText: { fontSize: 15, color: '#4B2A35', fontWeight: '600' },
@@ -1483,7 +1486,7 @@ const s = StyleSheet.create({
   businessSaveBtn: {
     marginTop: 20,
     borderRadius: 14,
-    backgroundColor: '#C62828',
+    backgroundColor: AppColors.primaryDark,
     alignItems: 'center',
     paddingVertical: 14,
     marginBottom: 20,
@@ -1588,9 +1591,10 @@ const s = StyleSheet.create({
 
   // Promo cards
   promoRow: { flexDirection: 'row', gap: 12, marginHorizontal: 12, marginTop: 12, height: 120 },
+  promoRowTablet: { height: 164 },
   promoCard: { flex: 1, borderRadius: 14, padding: 14, gap: 8, justifyContent: 'space-between' },
   promoEmoji: { fontSize: 24 },
-  promoRewardCard: { flex: 1, borderRadius: 14, overflow: 'hidden', minWidth: 0, flexBasis: 0 },
+  promoRewardCard: { flex: 1, borderRadius: 14, overflow: 'hidden', minWidth: 0, flexBasis: 0, backgroundColor: '#FFFFFF' },
   promoRewardBannerImg: { width: '100%', height: '100%', borderRadius: 14 },
   promoTitle: { fontSize: 13, fontWeight: '700', color: COLORS.text, lineHeight: 19 },
   promoArrow: { fontSize: 18, color: COLORS.primary, fontWeight: '700' },
@@ -1987,7 +1991,7 @@ const s = StyleSheet.create({
     width: 92,
     height: 92,
     borderRadius: 46,
-    backgroundColor: '#FFCDD2',
+    backgroundColor: AppColors.primarySoft,
     alignItems: 'center',
     justifyContent: 'center',
   },

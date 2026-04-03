@@ -26,7 +26,9 @@ import {
     TouchableOpacity,
     View
 } from 'react-native';
+import { AppColors } from '@/constants/appColors';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 // react-native-maps is not supported on web – lazy import for native only
 let MapView: React.ComponentType<any> | null = null;
@@ -40,16 +42,16 @@ if (Platform.OS !== 'web') {
 }
 
 const COLORS = {
-  green: '#E53935',
-  greenLight: '#FFCDD2',
+  green: AppColors.primaryDark,
+  greenLight: AppColors.primarySoft,
   greenBorder: '#D1D9E6',
-  bg: '#F5F5F5',
-  white: '#fff',
-  text: '#1A1A1A',
-  subText: '#666',
-  border: '#E8E8E8',
+  bg: AppColors.bg,
+  white: AppColors.white,
+  text: AppColors.text,
+  subText: AppColors.textMuted,
+  border: AppColors.border,
   gold: '#F5A623',
-  red: '#E53935',
+  red: AppColors.danger,
 };
 
 interface SelectedService {
@@ -88,6 +90,8 @@ export default function BookingConfirmScreen({
 }) {
   const router = useRouter();
   const { user } = useUser();
+  const insets = useSafeAreaInsets();
+  const headerTopPadding = Math.max(insets.top, 10);
   const [subScreen, setSubScreen] = useState<'main' | 'address' | 'addAddress' | 'payment'>('main');
   const [selectedAddress, setSelectedAddress] = useState<SavedAddr | null>(null);
   const [savedAddresses, setSavedAddresses] = useState<SavedAddr[]>([]);
@@ -247,9 +251,9 @@ export default function BookingConfirmScreen({
   // ===== ADD ADDRESS SCREEN =====
   if (subScreen === 'addAddress') {
     return (
-      <SafeAreaView style={s.container} edges={['top']}>
+      <SafeAreaView style={s.container} edges={['left', 'right', 'bottom']}>
         <StatusBar barStyle="dark-content" />
-        <View style={s.header}>
+        <View style={[s.header, { paddingTop: headerTopPadding }]}>
           <TouchableOpacity style={s.headerBackBtn} onPress={() => setSubScreen('address')}>
             <Text style={s.headerBackIcon}>←</Text>
           </TouchableOpacity>
@@ -323,9 +327,9 @@ export default function BookingConfirmScreen({
   // ===== ADDRESS LIST SCREEN =====
   if (subScreen === 'address') {
     return (
-      <SafeAreaView style={s.container} edges={['top']}>
+      <SafeAreaView style={s.container} edges={['left', 'right', 'bottom']}>
         <StatusBar barStyle="dark-content" />
-        <View style={s.header}>
+        <View style={[s.header, { paddingTop: headerTopPadding }]}>
           <TouchableOpacity style={s.headerBackBtn} onPress={() => setSubScreen('main')}>
             <Text style={s.headerBackIcon}>←</Text>
           </TouchableOpacity>
@@ -389,9 +393,9 @@ export default function BookingConfirmScreen({
   const selectedPayment = PAYMENT_METHODS.find((pm) => pm.id === paymentMethod);
 
   return (
-    <SafeAreaView style={s.container} edges={['top']}>
+    <SafeAreaView style={s.container} edges={['left', 'right', 'bottom']}>
       <StatusBar barStyle="dark-content" />
-      <View style={s.header}>
+      <View style={[s.header, { paddingTop: headerTopPadding }]}>
         <TouchableOpacity style={s.headerBackBtn} onPress={onClose}>
           <Text style={s.headerBackIcon}>←</Text>
         </TouchableOpacity>
@@ -716,13 +720,19 @@ function BookingSearchModal({
   // Get user location
   useEffect(() => {
     (async () => {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status === 'granted') {
-        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-        const coords = { latitude: loc.coords.latitude, longitude: loc.coords.longitude };
-        setUserLocation(coords);
-        setNearbyPositions(generateNearbyPositions(coords, therapists));
-      } else {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status === 'granted') {
+          const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+          const coords = { latitude: loc.coords.latitude, longitude: loc.coords.longitude };
+          setUserLocation(coords);
+          setNearbyPositions(generateNearbyPositions(coords, therapists));
+        } else {
+          setNearbyPositions(generateNearbyPositions(DEFAULT_LOCATION, therapists));
+        }
+      } catch {
+        // Location can fail in simulator / test mode; fallback to default coords.
+        setUserLocation(DEFAULT_LOCATION);
         setNearbyPositions(generateNearbyPositions(DEFAULT_LOCATION, therapists));
       }
     })();
@@ -807,6 +817,7 @@ function BookingSearchModal({
         const now = new Date();
         const timeStr = selectedSlot;
         addBooking({
+          customerUserId: user?.authUid || user?.phoneNumber || 'test-user',
           customerName: user?.displayName || user?.email || user?.phoneNumber || 'Khách',
           customerPhone: user?.phoneNumber || user?.email || '',
           therapistId: t.id,
@@ -911,9 +922,9 @@ function BookingSearchModal({
             </Marker>
           </MapView>
           ) : (
-            <View style={[bs.mapView, { backgroundColor: '#FFCDD2', justifyContent: 'center', alignItems: 'center' }]}>
+            <View style={[bs.mapView, { backgroundColor: AppColors.accentSoft, justifyContent: 'center', alignItems: 'center' }]}>
               <Text style={{ fontSize: 48 }}>📍</Text>
-              <Text style={{ color: '#E53935', fontWeight: '600', marginTop: 8 }}>Đang tìm kỹ thuật viên gần bạn...</Text>
+              <Text style={{ color: AppColors.primaryDark, fontWeight: '600', marginTop: 8 }}>Đang tìm kỹ thuật viên gần bạn...</Text>
             </View>
           )}
 
@@ -1355,7 +1366,7 @@ const bs = StyleSheet.create({
   backBtnText: { fontSize: 24, lineHeight: 28, fontWeight: '600', color: COLORS.text },
   cancelBtn: {
     position: 'absolute', top: 50, right: 16,
-    backgroundColor: '#E53935',
+    backgroundColor: AppColors.primaryDark,
     paddingHorizontal: 18, paddingVertical: 10, borderRadius: 22,
     shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.2, shadowRadius: 4, elevation: 4,
@@ -1497,7 +1508,8 @@ const s = StyleSheet.create({
     justifyContent: 'space-between',
     backgroundColor: COLORS.white,
     paddingHorizontal: 16,
-    paddingVertical: 14,
+    paddingTop: 0,
+    paddingBottom: 14,
     borderBottomWidth: 1,
     borderBottomColor: COLORS.border,
   },

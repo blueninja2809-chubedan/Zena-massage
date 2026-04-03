@@ -5,6 +5,7 @@ import {
     type ChatMessage,
     type ChatRoom,
     getChatMessages,
+    getChatRoomByBooking,
     getChatRoomsForUser,
     getOrCreateChatRoom,
     markChatMessagesRead,
@@ -25,6 +26,7 @@ import {
     TouchableOpacity,
     View,
 } from 'react-native';
+import { AppColors } from '@/constants/appColors';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 const translations = {
@@ -45,15 +47,15 @@ const translations = {
 };
 
 const COLORS = {
-  bg: '#FFFBFB',
-  text: '#1A1A1A',
-  subText: '#6F757B',
-  lightText: '#B0B0B0',
-  border: '#FFCDD2',
-  green: '#C62828',
-  greenOnline: '#E53935',
-  blue: '#E53935',
-  unreadBg: '#FFCDD2',
+  bg: AppColors.bg,
+  text: AppColors.text,
+  subText: AppColors.textMuted,
+  lightText: '#9A9088',
+  border: AppColors.border,
+  green: AppColors.primaryDark,
+  greenOnline: AppColors.success,
+  blue: AppColors.accent,
+  unreadBg: AppColors.primarySoft,
 };
 
 export default function ChatScreen({ onClose, bookingId }: { onClose: () => void; bookingId?: string }) {
@@ -65,25 +67,44 @@ export default function ChatScreen({ onClose, bookingId }: { onClose: () => void
   const [selectedRoom, setSelectedRoom] = useState<ChatRoom | null>(null);
   const [loadingRooms, setLoadingRooms] = useState(false);
 
-  const userId = user?.authUid || user?.phoneNumber || '';
+  const isTestMode =
+    process.env.EXPO_PUBLIC_TEST_MODE === 'true' ||
+    process.env.EXPO_PUBLIC_TEST_MODE === '1' ||
+    // eslint-disable-next-line no-undef
+    (typeof __DEV__ !== 'undefined' && __DEV__);
+
+  const userId = user?.authUid || user?.phoneNumber || (isTestMode ? 'test-user' : '');
 
   // If a specific bookingId is provided, open that chat directly
   useEffect(() => {
-    if (bookingId && userId) {
+    if (bookingId) {
       setLoadingRooms(true);
       // Look for existing room for this booking
       (async () => {
-        const rooms = await getChatRoomsForUser(userId);
-        const room = rooms.find(r => r.bookingId === bookingId);
-        if (room) {
-          setSelectedRoom(room);
+        try {
+          const room = userId ? (await getChatRoomsForUser(userId)).find((r) => r.bookingId === bookingId) : null;
+          const resolvedRoom = room ?? (await getChatRoomByBooking(bookingId));
+          if (resolvedRoom) setSelectedRoom(resolvedRoom);
+          setChatRooms(resolvedRoom ? [resolvedRoom] : []);
+        } catch {
+          setChatRooms([]);
+        } finally {
+          setLoadingRooms(false);
         }
-        setChatRooms(rooms);
-        setLoadingRooms(false);
       })();
       return;
     }
   }, [bookingId, userId]);
+
+  // Load user's chat room list
+  useEffect(() => {
+    if (!userId) return;
+    setLoadingRooms(true);
+    getChatRoomsForUser(userId).then((rooms) => {
+      setChatRooms(rooms);
+      setLoadingRooms(false);
+    }).catch(() => setLoadingRooms(false));
+  }, [userId]);
 
   // If there's an active booking, show the connected therapist chat
   if (activeBooking || selectedRoom) {
@@ -102,16 +123,6 @@ export default function ChatScreen({ onClose, bookingId }: { onClose: () => void
       />
     );
   }
-
-  // Load user's chat room list
-  useEffect(() => {
-    if (!userId) return;
-    setLoadingRooms(true);
-    getChatRoomsForUser(userId).then((rooms) => {
-      setChatRooms(rooms);
-      setLoadingRooms(false);
-    }).catch(() => setLoadingRooms(false));
-  }, [userId]);
 
   // Chat room list or empty state
   return (
@@ -192,7 +203,8 @@ function ActiveChatView({
   const therapist = activeBooking?.therapist;
   const therapistName = therapist?.name || existingRoom?.therapistName || '';
   const therapistAvatar = therapist?.avatar || '';
-  const userId = user?.authUid || user?.phoneNumber || '';
+  // Resolve userId to keep "my message" alignment consistent in test mode.
+  const userId = user?.authUid || user?.phoneNumber || existingRoom?.customerId || existingRoom?.therapistId || '';
   const userRole: 'customer' | 'therapist' = user?.role === 'therapist' ? 'therapist' : 'customer';
 
   const [messageText, setMessageText] = useState('');
@@ -249,23 +261,33 @@ function ActiveChatView({
             customerName,
             activeBooking.therapist.name,
           );
-
-          // Send system welcome messages if new room
-          const existingMessages = await getChatMessages(currentRoomId, 1);
-          if (existingMessages.length === 0) {
-            const now = new Date();
-            const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
-            const dateStr = `${now.getDate().toString().padStart(2, '0')}/${(now.getMonth() + 1).toString().padStart(2, '0')}/${now.getFullYear()}`;
-            await sendChatMessage(currentRoomId, 'system', 'system',
-              `🟢 ${chatStrings.connected}\n\n${chatStrings.bookingTime} ${timeStr} ${dateStr}`, 'system');
-            await sendChatMessage(currentRoomId, 'system', 'system',
-              `${chatStrings.noteWarning}\n\n${chatStrings.noteWarning2}`, 'system');
-          }
         }
 
         if (!currentRoomId || cancelled) return;
 
         setRoomId(currentRoomId);
+
+        // Send system welcome messages if room is empty (helps both test mode and real flow)
+        const existingMessages = await getChatMessages(currentRoomId, 1);
+        if (existingMessages.length === 0) {
+          const now = new Date();
+          const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+          const dateStr = `${now.getDate().toString().padStart(2, '0')}/${(now.getMonth() + 1).toString().padStart(2, '0')}/${now.getFullYear()}`;
+          await sendChatMessage(
+            currentRoomId,
+            'system',
+            'system',
+            `🟢 ${chatStrings.connected}\n\n${chatStrings.bookingTime} ${timeStr} ${dateStr}`,
+            'system',
+          );
+          await sendChatMessage(
+            currentRoomId,
+            'system',
+            'system',
+            `${chatStrings.noteWarning}\n\n${chatStrings.noteWarning2}`,
+            'system',
+          );
+        }
 
         // Load existing messages
         const msgs = await getChatMessages(currentRoomId);

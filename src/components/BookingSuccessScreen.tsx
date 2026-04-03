@@ -3,16 +3,17 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React from 'react';
 import { ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { AppColors } from '@/constants/appColors';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 const P = {
-  primary: '#C62828',
-  primaryLight: '#E53935',
-  card: '#FFFFFF',
-  text: '#1A1A1A',
-  sub: '#64748B',
-  line: '#E2E8F0',
-  bg: '#FFF5F5',
+  primary: AppColors.primaryDark,
+  primaryLight: AppColors.primary,
+  card: AppColors.white,
+  text: AppColors.text,
+  sub: AppColors.textMuted,
+  line: AppColors.border,
+  bg: AppColors.bg,
 };
 
 export default function BookingSuccessScreen() {

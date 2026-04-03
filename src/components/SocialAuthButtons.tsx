@@ -1,4 +1,5 @@
 import type { UserData } from '@/contexts/UserContext';
+import { AppColors } from '@/constants/appColors';
 import { FontAwesome5 } from '@expo/vector-icons';
 import {
   finalizeOAuthUserProfile,
@@ -14,9 +15,9 @@ import { ActivityIndicator, Alert, Platform, StyleSheet, Text, TouchableOpacity,
 WebBrowser.maybeCompleteAuthSession();
 
 const COLORS = {
-  primaryDark: '#C62828',
-  border: '#E2E8F0',
-  text: '#0F172A',
+  primaryDark: AppColors.primaryDark,
+  border: AppColors.border,
+  text: AppColors.text,
 };
 
 type Props = {

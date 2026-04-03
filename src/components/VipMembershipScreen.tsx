@@ -1,20 +1,22 @@
 import Feather from '@expo/vector-icons/Feather';
 import { useRouter } from 'expo-router';
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    Platform,
-    ScrollView,
-    StatusBar,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  Platform,
+  ScrollView,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from 'react-native';
+import { useIAP, type ProductSubscription, type Purchase } from 'react-native-iap';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useLanguage } from '@/contexts/LanguageContext';
+import { AppColors } from '@/constants/appColors';
 import { useUser } from '@/contexts/UserContext';
 
 type VipPlan = {
@@ -67,15 +69,15 @@ const C = {
   lightBorder: '#E2E8F0',
   goldA: '#FDEAB0',
   goldB: '#E8B16C',
-  primary: '#E53935',
-  primarySoft: '#FFCDD2',
-  success: '#C62828',
+  primary: AppColors.primaryDark,
+  primarySoft: AppColors.primarySoft,
+  success: AppColors.accent,
 };
 
 const COPY = {
   vi: {
     title: 'Hội viên VIP',
-    heroTitle: 'Quyền lợi đặc quyền dành cho hội viên VIP Glow',
+    heroTitle: 'Quyền lợi đặc quyền dành cho hội viên VIP Zena',
     vipCardTitle: 'Hội viên VIP',
     benefits: [
       'Thấy tuổi của kỹ thuật viên',
@@ -85,17 +87,18 @@ const COPY = {
     pickPlan: 'Chọn gói đăng ký',
     loginRequiredTitle: 'Yêu cầu đăng nhập',
     loginRequiredMessage: 'Vui lòng đăng nhập trước khi nâng cấp VIP.',
-    paymentSuccessTitle: 'Thanh toán mô phỏng',
-    paymentSuccessMessage: (provider: string) => `Đã kích hoạt VIP qua ${provider} (chế độ tạm).`,
+    paymentSuccessTitle: 'Thanh toán thành công',
+    paymentSuccessMessage: (provider: string) => `Đã kích hoạt VIP qua ${provider}.`,
     paymentErrorTitle: 'Lỗi',
-    paymentErrorMessage: 'Không thể mở luồng thanh toán. Vui lòng thử lại.',
-    payWith: (provider: string) => `Thanh toán với ${provider}`,
+    paymentErrorMessage: 'Không thể xử lý thanh toán. Vui lòng thử lại.',
+    productUnavailable: 'Gói đăng ký chưa sẵn sàng trên App Store. Vui lòng kiểm tra Product ID.',
+    payWith: (_provider: string) => 'Thanh toán ',
     autoRenewNote: 'Đăng ký sẽ được gia hạn tự động khi đến hạn. Bạn có thể hủy trong phần quản lý thuê bao của hệ điều hành.',
     activeUntil: (date: string) => `Bạn đang là hội viên VIP${date ? ` đến ${date}` : ''}.`,
   },
   en: {
     title: 'VIP Membership',
-    heroTitle: 'Exclusive benefits for Glow VIP members',
+    heroTitle: 'Exclusive benefits for Zena VIP members',
     vipCardTitle: 'VIP Member',
     benefits: [
       'View therapist age',
@@ -105,10 +108,11 @@ const COPY = {
     pickPlan: 'Choose a subscription plan',
     loginRequiredTitle: 'Sign-in required',
     loginRequiredMessage: 'Please sign in before upgrading to VIP.',
-    paymentSuccessTitle: 'Simulated payment',
-    paymentSuccessMessage: (provider: string) => `VIP has been activated via ${provider} (temporary mode).`,
+    paymentSuccessTitle: 'Payment successful',
+    paymentSuccessMessage: (provider: string) => `VIP has been activated via ${provider}.`,
     paymentErrorTitle: 'Error',
-    paymentErrorMessage: 'Unable to open the payment flow. Please try again.',
+    paymentErrorMessage: 'Unable to process payment. Please try again.',
+    productUnavailable: 'Subscription is not available on App Store yet. Please check Product IDs.',
     payWith: (provider: string) => `Pay with ${provider}`,
     autoRenewNote: 'Your subscription will auto-renew unless canceled in your system subscription settings.',
     activeUntil: (date: string) => `You are a VIP member${date ? ` until ${date}` : ''}.`,
@@ -122,15 +126,55 @@ export default function VipMembershipScreen({ onClose }: { onClose?: () => void 
 
   const [selectedPlanId, setSelectedPlanId] = useState<VipPlan['id']>('vip_1m');
   const [isPaying, setIsPaying] = useState(false);
+  const [storeSyncing, setStoreSyncing] = useState(false);
 
   const useEnglish = language === 'en';
   const text = useEnglish ? COPY.en : COPY.vi;
-  const currentPaymentProvider = Platform.OS === 'android' ? 'Google Play' : 'Apple Pay';
+  const currentPaymentProvider = Platform.OS === 'android' ? 'Google Play' : 'App Store';
+  const isNativeStore = Platform.OS === 'ios' || Platform.OS === 'android';
+
+  const { connected, subscriptions, fetchProducts, requestPurchase, finishTransaction } = useIAP({
+    onPurchaseSuccess: async (purchase: Purchase) => {
+      if (!user) return;
+      const purchasedPlan = getPlanByStoreSku(purchase.productId);
+      if (!purchasedPlan) return;
+
+      const expiresAt = addMonths(new Date(), purchasedPlan.durationMonths).toISOString();
+      await setUser({
+        ...user,
+        isVipMember: true,
+        vipPlanId: purchasedPlan.id,
+        vipExpiresAt: expiresAt,
+      });
+      await finishTransaction({ purchase, isConsumable: false });
+      setIsPaying(false);
+      Alert.alert(text.paymentSuccessTitle, text.paymentSuccessMessage(currentPaymentProvider));
+    },
+    onPurchaseError: (error) => {
+      console.warn('[VIP] purchase error:', error);
+      setIsPaying(false);
+      Alert.alert(text.paymentErrorTitle, error.message || text.paymentErrorMessage);
+    },
+  });
 
   const selectedPlan = useMemo(
     () => PLANS.find((plan) => plan.id === selectedPlanId) || PLANS[0],
     [selectedPlanId],
   );
+  const storeProductsBySku = useMemo(() => {
+    const map = new Map<string, ProductSubscription>();
+    subscriptions.forEach((product) => map.set(product.id, product));
+    return map;
+  }, [subscriptions]);
+
+  useEffect(() => {
+    if (!isNativeStore || !connected) return;
+    const skus = Platform.OS === 'ios' ? PLANS.map((p) => p.iosSku) : PLANS.map((p) => p.androidSku);
+    setStoreSyncing(true);
+    fetchProducts({ skus, type: 'subs' })
+      .catch((e) => console.warn('[VIP] fetchProducts failed:', e))
+      .finally(() => setStoreSyncing(false));
+  }, [connected, fetchProducts, isNativeStore]);
 
   const handleBack = () => {
     if (onClose) {
@@ -148,19 +192,27 @@ export default function VipMembershipScreen({ onClose }: { onClose?: () => void 
 
     try {
       setIsPaying(true);
-      // TODO: Integrate official in-app billing SDK for real payments.
-      const expiresAt = addMonths(new Date(), selectedPlan.durationMonths).toISOString();
-      await setUser({
-        ...user,
-        isVipMember: true,
-        vipPlanId: selectedPlan.id,
-        vipExpiresAt: expiresAt,
+      if (!isNativeStore) {
+        throw new Error(text.paymentErrorMessage);
+      }
+
+      const selectedStoreSku = Platform.OS === 'ios' ? selectedPlan.iosSku : selectedPlan.androidSku;
+      const found = storeProductsBySku.get(selectedStoreSku);
+      if (!found) {
+        throw new Error(text.productUnavailable);
+      }
+
+      await requestPurchase({
+        type: 'subs',
+        request: {
+          apple: { sku: selectedPlan.iosSku },
+          google: { skus: [selectedPlan.androidSku] },
+        },
       });
-      Alert.alert(text.paymentSuccessTitle, text.paymentSuccessMessage(currentPaymentProvider));
-    } catch {
-      Alert.alert(text.paymentErrorTitle, text.paymentErrorMessage);
-    } finally {
+    } catch (err) {
       setIsPaying(false);
+      const msg = err instanceof Error ? err.message : text.paymentErrorMessage;
+      Alert.alert(text.paymentErrorTitle, msg);
     }
   };
 
@@ -203,7 +255,7 @@ export default function VipMembershipScreen({ onClose }: { onClose?: () => void 
                     {useEnglish ? plan.labelEn : plan.labelVi}
                   </Text>
                   <Text style={[s.planPrice, isActive && s.planPriceActive]}>
-                    {formatPlanPrice(plan.priceVnd, useEnglish)}
+                    {formatPlanPrice(plan, useEnglish, storeProductsBySku)}
                   </Text>
                 </TouchableOpacity>
               );
@@ -216,7 +268,7 @@ export default function VipMembershipScreen({ onClose }: { onClose?: () => void 
             activeOpacity={0.9}
             disabled={isPaying}
           >
-            {isPaying ? (
+            {isPaying || storeSyncing ? (
               <ActivityIndicator color="#FFFFFF" />
             ) : (
               <Text style={s.payBtnText}>{text.payWith(currentPaymentProvider)}</Text>
@@ -266,12 +318,20 @@ function formatDate(value: string, useEnglish: boolean) {
   return `${dd}/${mm}/${yyyy}`;
 }
 
-function formatPlanPrice(priceVnd: number, useEnglish: boolean) {
+function getPlanByStoreSku(productId: string) {
+  return PLANS.find((plan) => plan.iosSku === productId || plan.androidSku === productId) ?? null;
+}
+
+function formatPlanPrice(plan: VipPlan, useEnglish: boolean, storeProductsBySku: Map<string, ProductSubscription>) {
+  const sku = Platform.OS === 'ios' ? plan.iosSku : plan.androidSku;
+  const storeProduct = storeProductsBySku.get(sku);
+  if (storeProduct?.displayPrice) return storeProduct.displayPrice;
+
   if (useEnglish) {
-    const usd = priceVnd / USD_RATE;
+    const usd = plan.priceVnd / USD_RATE;
     return `$${usd.toFixed(2)}`;
   }
-  return `${priceVnd.toLocaleString('vi-VN')}đ`;
+  return `${plan.priceVnd.toLocaleString('vi-VN')}đ`;
 }
 
 

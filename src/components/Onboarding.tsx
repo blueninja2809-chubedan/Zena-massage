@@ -1,3 +1,4 @@
+import { AppColors } from '@/constants/appColors';
 import React from 'react';
 import {
     StyleSheet,
@@ -61,35 +62,35 @@ const styles = StyleSheet.create({
     flex: 1,
     padding: 22,
     justifyContent: 'center',
-    backgroundColor: '#FFFBFB',
+    backgroundColor: AppColors.bg,
   },
   title: {
     fontSize: 28,
     fontWeight: '800',
-    color: '#1A1A1A',
+    color: AppColors.text,
     marginBottom: 10,
   },
   subtitle: {
     fontSize: 15,
-    color: '#4B5563',
+    color: AppColors.textMuted,
     marginBottom: 30,
   },
   stepCard: {
-    backgroundColor: '#FFFBFB',
+    backgroundColor: AppColors.white,
     borderRadius: 20,
     padding: 20,
     borderWidth: 1,
-    borderColor: '#D1D9E6',
+    borderColor: AppColors.border,
   },
   stepTitle: {
     fontSize: 18,
     fontWeight: '800',
-    color: '#1A1A1A',
+    color: AppColors.text,
     marginBottom: 8,
   },
   stepDescription: {
     fontSize: 14,
-    color: '#4B5563',
+    color: AppColors.textMuted,
     marginBottom: 20,
     lineHeight: 20,
   },
@@ -100,9 +101,9 @@ const styles = StyleSheet.create({
   },
   languageButton: {
     flex: 1,
-    backgroundColor: '#FFCDD2',
+    backgroundColor: AppColors.primarySoft,
     borderWidth: 1,
-    borderColor: '#D1D9E6',
+    borderColor: AppColors.border,
     borderRadius: 14,
     paddingVertical: 14,
     alignItems: 'center',
@@ -110,6 +111,6 @@ const styles = StyleSheet.create({
   languageButtonText: {
     fontSize: 15,
     fontWeight: '700',
-    color: '#C62828',
+    color: AppColors.primaryDark,
   },
 });

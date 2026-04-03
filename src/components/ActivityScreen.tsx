@@ -1,6 +1,7 @@
 import { useBookings, type SharedBooking } from '@/contexts/BookingsContext';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useUser } from '@/contexts/UserContext';
+import { useTabletLayout } from '@/hooks/use-tablet-layout';
 import type { Therapist } from '@/lib/types';
 import { useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
@@ -17,19 +18,20 @@ import {
     View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { AppColors } from '@/constants/appColors';
 import BookingDetailModal from './BookingDetailModal';
 import ChatScreen from './ChatScreen';
 import ReviewModal from './ReviewModal';
 import TherapistDetailScreen from './TherapistDetailScreen';
 
 const COLORS = {
-  primary: '#E53935',
-  dark: '#C62828',
-  light: '#EF5350',
-  bg: '#FFFBFB',
-  text: '#1A1A1A',
-  lightText: '#4B5563',
-  accent: '#E53935',
+  primary: AppColors.primaryDark,
+  dark: AppColors.primaryDark,
+  light: AppColors.border,
+  bg: AppColors.bg,
+  text: AppColors.text,
+  lightText: AppColors.textMuted,
+  accent: AppColors.accent,
 };
 
 const translations = {
@@ -88,13 +90,13 @@ const translations = {
 const getStatusColor = (status: string) => {
   switch (status) {
     case 'confirmed':
-      return '#E53935';
+      return AppColors.primaryDark;
     case 'pending':
-      return '#E69500';
+      return '#C77800';
     case 'completed':
-      return '#4B5563';
+      return AppColors.textMuted;
     case 'cancelled':
-      return '#E53935';
+      return AppColors.danger;
     default:
       return COLORS.primary;
   }
@@ -103,13 +105,13 @@ const getStatusColor = (status: string) => {
 const getStatusBgColor = (status: string) => {
   switch (status) {
     case 'confirmed':
-      return '#F9E9EC';
+      return AppColors.accentSoft;
     case 'pending':
-      return '#F6DEE2';
+      return '#FFF3E0';
     case 'completed':
-      return '#F2E8EA';
+      return AppColors.primarySoft2;
     case 'cancelled':
-      return '#FBE9EC';
+      return AppColors.dangerBg;
     default:
       return COLORS.light;
   }
@@ -120,13 +122,38 @@ export default function ActivityScreen() {
   const insets = useSafeAreaInsets();
   const { user } = useUser();
   const { language } = useLanguage();
-  const { getCustomerBookings, updateStatus, hasReviewed } = useBookings();
+  const { bookings, updateStatus, hasReviewed } = useBookings();
+  const tabletLayout = useTabletLayout();
   const strings = translations[language as keyof typeof translations] || translations.vi;
-  const userIdentifier = user?.phoneNumber || user?.email || '';
+  const isTestMode =
+    process.env.EXPO_PUBLIC_TEST_MODE === 'true' ||
+    process.env.EXPO_PUBLIC_TEST_MODE === '1' ||
+    // eslint-disable-next-line no-undef
+    (typeof __DEV__ !== 'undefined' && __DEV__);
 
   const allBookings = useMemo(
-    () => (userIdentifier ? getCustomerBookings(userIdentifier) : []),
-    [getCustomerBookings, userIdentifier],
+    () => {
+      if (!user) return [];
+
+      const authUid = user.authUid || '';
+      const phone = user.phoneNumber || '';
+      const email = user.email || '';
+      const displayName = user.displayName || '';
+
+      const matched = bookings.filter((b) => {
+        const bookingUserId = (b as SharedBooking & { customerUserId?: string }).customerUserId || '';
+        return (
+          (!!authUid && bookingUserId === authUid) ||
+          (!!phone && b.customerPhone === phone) ||
+          (!!email && b.customerPhone === email) ||
+          (!!displayName && b.customerName === displayName)
+        );
+      });
+
+      // For local test flow, always show orders even if profile identifiers differ.
+      return matched.length > 0 ? matched : (isTestMode ? bookings : matched);
+    },
+    [bookings, isTestMode, user],
   );
 
   const [selectedStatus, setSelectedStatus] = useState<string | null>(null);
@@ -234,7 +261,7 @@ export default function ActivityScreen() {
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.filterContainer}
+          contentContainerStyle={[styles.filterContainer, { paddingHorizontal: tabletLayout.horizontalPadding }]}
         >
           {statuses.map((item) => {
             const isActive = selectedStatus === item || (selectedStatus === null && item === 'all');
@@ -261,12 +288,14 @@ export default function ActivityScreen() {
     return (
       <View style={[styles.container, { paddingTop: insets.top }]}>
         <StatusBar barStyle="dark-content" backgroundColor={COLORS.bg} />
+        <View style={[styles.pageContent, tabletLayout.contentContainer]}>
         <View style={styles.emptyContainer}>
           <Text style={styles.emptyIcon}>🔐</Text>
           <Text style={styles.emptyTitle}>{strings.noLogin}</Text>
           <TouchableOpacity style={styles.primaryBtn} onPress={() => router.push('/account')}>
             <Text style={styles.primaryBtnText}>{strings.signIn}</Text>
           </TouchableOpacity>
+        </View>
         </View>
       </View>
     );
@@ -277,16 +306,21 @@ export default function ActivityScreen() {
     return (
       <View style={[styles.container, { paddingTop: insets.top }]}>
         <StatusBar barStyle="dark-content" backgroundColor={COLORS.bg} />
-        <View style={styles.header}>
+        <View style={[styles.pageContent, tabletLayout.contentContainer]}>
+        <View style={[styles.header, { paddingHorizontal: tabletLayout.horizontalPadding }]}>
           <Text style={styles.headerTitle}>{strings.myBookings}</Text>
         </View>
         <View style={styles.emptyContainer}>
           <Text style={styles.emptyIcon}>📭</Text>
           <Text style={styles.emptyTitle}>{strings.noBookings}</Text>
           <Text style={styles.emptyDesc}>{strings.noBookingsDesc}</Text>
-          <TouchableOpacity style={styles.primaryBtn}>
+          <TouchableOpacity
+            style={styles.primaryBtn}
+            onPress={() => router.push('/(tabs)/index')}
+          >
             <Text style={styles.primaryBtnText}>{strings.explore}</Text>
           </TouchableOpacity>
+        </View>
         </View>
       </View>
     );
@@ -296,7 +330,8 @@ export default function ActivityScreen() {
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <StatusBar barStyle="dark-content" backgroundColor={COLORS.bg} />
-      <View style={styles.header}>
+      <View style={[styles.pageContent, tabletLayout.contentContainer]}>
+      <View style={[styles.header, { paddingHorizontal: tabletLayout.horizontalPadding }]}>
         <Text style={styles.headerTitle}>{strings.myBookings}</Text>
       </View>
 
@@ -306,9 +341,10 @@ export default function ActivityScreen() {
         data={filteredBookings}
         renderItem={renderBookingCard}
         keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.listContainer}
+        contentContainerStyle={[styles.listContainer, { paddingHorizontal: tabletLayout.horizontalPadding }]}
         showsVerticalScrollIndicator={false}
       />
+      </View>
 
       <BookingDetailModal
         visible={detailVisible}
@@ -356,6 +392,10 @@ const styles = StyleSheet.create({
   centerContent: {
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  pageContent: {
+    flex: 1,
+    width: '100%',
   },
   header: {
     paddingHorizontal: 16,
@@ -507,10 +547,10 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   cancelBtn: {
-    backgroundColor: '#FFCDD2',
+    backgroundColor: AppColors.primarySoft,
   },
   cancelBtnText: {
-    color: '#E53935',
+    color: AppColors.danger,
   },
   reviewBtn: {
     backgroundColor: '#E8F5E9',

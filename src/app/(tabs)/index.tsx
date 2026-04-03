@@ -1,9 +1,7 @@
-import { FontAwesome5 } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
     ActivityIndicator,
-    Dimensions,
     FlatList,
     Image,
     InteractionManager,
@@ -14,6 +12,7 @@ import {
     Text,
     TextInput,
     TouchableOpacity,
+    useWindowDimensions,
     View
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -26,11 +25,13 @@ import type { OnboardingLanguage } from '@/components/Onboarding';
 import PromotionsScreen from '@/components/PromotionsScreen';
 import TherapistTopUpScreen from '@/components/TherapistTopUpScreen';
 import WalletScreen from '@/components/WalletScreen';
+import { AppColors } from '@/constants/appColors';
 import { DEFAULT_CITY, SERVICE_TYPES, VIETNAM_PROVINCES } from '@/constants/bookingFilters';
 import { useActiveBooking } from '@/contexts/ActiveBookingContext';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useNotifications } from '@/contexts/NotificationContext';
 import { useUser } from '@/contexts/UserContext';
+import { useTabletLayout } from '@/hooks/use-tablet-layout';
 import { getOrCreateWallet, getTherapists } from '@/lib/supabaseService';
 import type { Therapist } from '@/lib/types';
 
@@ -112,33 +113,130 @@ const translations: Record<OnboardingLanguage, Record<string, string>> = {
   },
 };
 
-// Chủ đề đỏ tươi (Material Red)
 const COLORS = {
-  primary: '#E53935',
-  dark: '#C62828',
-  light: '#EF5350',
-  bg: '#F8F9FA',
-  text: '#1A1A1A',
-  lightText: '#5C4A4A',
-  accent: '#C62828',
+  primary: AppColors.primaryDark,
+  dark: AppColors.primaryDark,
+  light: AppColors.border,
+  bg: AppColors.bg,
+  text: AppColors.text,
+  lightText: AppColors.textMuted,
+  accent: AppColors.accent,
 };
 
-const supportChannels = [
-  { id: 'zalo', name: 'Zalo', iconType: 'zalo' as const, iconName: '', color: '#FFFFFF' },
-  { id: 'line', name: 'Line', iconType: 'fa5' as const, iconName: 'line', color: '#06C755' },
-  { id: 'kakao', name: 'Kakao Talk', iconType: 'text' as const, iconName: 'K', color: '#FEE500', iconColor: '#3C1E1E' },
-  { id: 'whatsapp', name: 'Whatsapp', iconType: 'fa5' as const, iconName: 'whatsapp', color: '#25D366' },
-  { id: 'messenger', name: 'Messenger', iconType: 'fa5' as const, iconName: 'facebook-messenger', color: '#0084FF' },
-  { id: 'telegram', name: 'Telegram', iconType: 'fa5' as const, iconName: 'telegram-plane', color: '#26A5E4' },
-];
+const isTestMode =
+  process.env.EXPO_PUBLIC_TEST_MODE === 'true' ||
+  process.env.EXPO_PUBLIC_TEST_MODE === '1' ||
+  (typeof __DEV__ !== 'undefined' && __DEV__);
+
+function buildMockFeaturedTherapists(city: string): Therapist[] {
+  const now = new Date().toISOString();
+  const baseCity = city?.trim() || DEFAULT_CITY;
+  return [
+    {
+      id: 'mock-therapist-1',
+      name: 'Linh Anh',
+      phoneNumber: '0901000001',
+      email: 'linhanh.mock@zena.vn',
+      gender: 'female',
+      avatar: 'https://i.pravatar.cc/300?img=47',
+      bio: 'KTV nhẹ nhàng, chuyên massage thư giãn tại nhà.',
+      bioEn: 'Gentle therapist specialized in relaxing home massage.',
+      specialties: ['Massage Dầu + Giác Hơi', 'Massage Thái'],
+      experience: 5,
+      rating: 4.9,
+      reviewCount: 128,
+      hourlyRate: 380000,
+      distanceFromCenter: 1.3,
+      workingCity: baseCity,
+      isAvailable: true,
+      availability: {},
+      languages: ['vi', 'en'],
+      certifications: ['Spa Therapy'],
+      createdAt: now,
+    },
+    {
+      id: 'mock-therapist-2',
+      name: 'Ngọc Mai',
+      phoneNumber: '0901000002',
+      email: 'ngocmai.mock@zena.vn',
+      gender: 'female',
+      avatar: 'https://i.pravatar.cc/300?img=32',
+      bio: 'KTV kinh nghiệm cao, lực tay tốt, phù hợp dân văn phòng.',
+      bioEn: 'Experienced therapist with strong pressure for office workers.',
+      specialties: ['Massage Đá Nóng', 'Massage Cổ Vai Gáy'],
+      experience: 7,
+      rating: 4.8,
+      reviewCount: 173,
+      hourlyRate: 420000,
+      distanceFromCenter: 2.1,
+      workingCity: baseCity,
+      isAvailable: true,
+      availability: {},
+      languages: ['vi'],
+      certifications: ['Hot Stone'],
+      createdAt: now,
+    },
+    {
+      id: 'mock-therapist-3',
+      name: 'Thảo Vy',
+      phoneNumber: '0901000003',
+      email: 'thaovy.mock@zena.vn',
+      gender: 'female',
+      avatar: 'https://i.pravatar.cc/300?img=44',
+      bio: 'Phong cách trị liệu nhẹ nhàng, chăm sóc toàn thân.',
+      bioEn: 'Soft therapeutic style with full body care.',
+      specialties: ['Massage Foot', 'Aromatherapy'],
+      experience: 4,
+      rating: 4.7,
+      reviewCount: 94,
+      hourlyRate: 360000,
+      distanceFromCenter: 0.9,
+      workingCity: baseCity,
+      isAvailable: true,
+      availability: {},
+      languages: ['vi', 'en'],
+      certifications: ['Aromatherapy'],
+      createdAt: now,
+    },
+    {
+      id: 'mock-therapist-4',
+      name: 'Mỹ Duyên',
+      phoneNumber: '0901000004',
+      email: 'myduyen.mock@zena.vn',
+      gender: 'female',
+      avatar: 'https://i.pravatar.cc/300?img=49',
+      bio: 'KTV thân thiện, phù hợp khách hàng mới trải nghiệm.',
+      bioEn: 'Friendly therapist, ideal for first-time customers.',
+      specialties: ['Massage Thư Giãn', 'Massage Body'],
+      experience: 3,
+      rating: 4.8,
+      reviewCount: 81,
+      hourlyRate: 340000,
+      distanceFromCenter: 3.0,
+      workingCity: baseCity,
+      isAvailable: true,
+      availability: {},
+      languages: ['vi'],
+      certifications: ['Body Massage'],
+      createdAt: now,
+    },
+  ];
+}
+
+function hasTherapistInCity(items: Therapist[], city: string): boolean {
+  const target = city.trim().toLowerCase();
+  if (!target) return items.length > 0;
+  return items.some((item) => (item.workingCity || '').trim().toLowerCase() === target);
+}
 
 export default function HomeScreen() {
+  const { width: screenWidth } = useWindowDimensions();
+  const tabletLayout = useTabletLayout();
   const insets = useSafeAreaInsets();
   const { language } = useLanguage();
   const { user, setUser } = useUser();
   const { activeBooking } = useActiveBooking();
   const router = useRouter();
-  const [showSupportModal, setShowSupportModal] = useState(false);
   const [showTherapistModal, setShowTherapistModal] = useState(false);
   const [showMassageHome, setShowMassageHome] = useState(false);
   const [showMassageLocation, setShowMassageLocation] = useState(false);
@@ -161,6 +259,17 @@ export default function HomeScreen() {
   const strings = useMemo(() => {
     return translations[language] ?? translations.vi;
   }, [language]);
+  const contentMaxWidth = tabletLayout.isTablet ? 980 : screenWidth;
+  const contentHorizontalPadding = tabletLayout.horizontalPadding;
+  const contentHorizontalInset = tabletLayout.isTablet ? contentHorizontalPadding : 8;
+  const contentAreaWidth = Math.min(screenWidth - contentHorizontalPadding * 2, contentMaxWidth);
+  const gridGap = tabletLayout.isTablet ? 16 : 12;
+  const gridHeight = tabletLayout.isTablet ? 260 : 210;
+  const rightColumnWidth = tabletLayout.isTablet
+    ? Math.max(180, contentAreaWidth * 0.38)
+    : Math.max(140, (screenWidth - 44) * 0.42);
+  const featuredCardWidth = tabletLayout.isTablet ? 176 : 140;
+  const cardImageResizeMode = tabletLayout.isTablet ? 'contain' : 'cover';
 
   useEffect(() => {
     if (user?.selectedCity && user.selectedCity !== selectedCity) {
@@ -201,10 +310,20 @@ export default function HomeScreen() {
         try {
           const data = await getTherapists();
           if (cancelled) return;
-          const sorted = [...data].sort((a, b) => b.rating - a.rating);
+          let source = data;
+          if (isTestMode) {
+            if (source.length === 0) {
+              source = buildMockFeaturedTherapists(selectedCity);
+            } else if (!hasTherapistInCity(source, selectedCity)) {
+              source = [...source, ...buildMockFeaturedTherapists(selectedCity)];
+            }
+          }
+          const sorted = [...source].sort((a, b) => b.rating - a.rating);
           setFeaturedTherapists(sorted);
         } catch {
-          if (!cancelled) setFeaturedTherapists([]);
+          if (!cancelled) {
+            setFeaturedTherapists(isTestMode ? buildMockFeaturedTherapists(selectedCity) : []);
+          }
         } finally {
           if (!cancelled) setLoadingFeatured(false);
         }
@@ -214,12 +333,7 @@ export default function HomeScreen() {
       cancelled = true;
       task.cancel?.();
     };
-  }, []);
-
-  const handleSelectSupport = (channel: typeof supportChannels[0]) => {
-    console.log('Selected support channel:', channel.name);
-    setShowSupportModal(false);
-  };
+  }, [selectedCity]);
 
   const handleSelectCity = async (city: string) => {
     setSelectedCity(city);
@@ -239,10 +353,18 @@ export default function HomeScreen() {
     try {
       setLoadingTherapists(true);
       const data = await getTherapists();
-      setTherapists(data);
+      let source = data;
+      if (isTestMode) {
+        if (source.length === 0) {
+          source = buildMockFeaturedTherapists(selectedCity);
+        } else if (!hasTherapistInCity(source, selectedCity)) {
+          source = [...source, ...buildMockFeaturedTherapists(selectedCity)];
+        }
+      }
+      setTherapists(source);
     } catch (error) {
       console.error('Error loading therapists from home:', error);
-      setTherapists([]);
+      setTherapists(isTestMode ? buildMockFeaturedTherapists(selectedCity) : []);
     } finally {
       setLoadingTherapists(false);
     }
@@ -256,7 +378,11 @@ export default function HomeScreen() {
     return (
       <TouchableOpacity style={styles.therapistCard} activeOpacity={0.85}>
         <View style={styles.therapistAvatar}>
-          <Text style={styles.therapistAvatarText}>{item.gender === 'female' ? '👩' : '👨'}</Text>
+          {item.avatar?.startsWith('http') ? (
+            <Image source={{ uri: item.avatar }} style={styles.therapistAvatarImage} />
+          ) : (
+            <Text style={styles.therapistAvatarText}>{item.gender === 'female' ? '👩' : '👨'}</Text>
+          )}
         </View>
         <View style={styles.therapistInfo}>
           <Text style={styles.therapistName}>{item.name}</Text>
@@ -302,6 +428,7 @@ export default function HomeScreen() {
 
       {/* Khối đỏ bọc đầu (full-bleed), bo góc đáy — đồng bộ app dịch vụ */}
       <View style={[styles.heroBlue, { paddingTop: Math.max(insets.top, 10) + 8 }]}>
+        <View style={[styles.pageMax, { maxWidth: contentMaxWidth, paddingHorizontal: contentHorizontalInset }]}>
         <View style={styles.headerBar}>
           <View style={styles.headerLeft}>
             <TouchableOpacity style={styles.avatarPlaceholder} onPress={() => router.push('/account')}>
@@ -328,10 +455,12 @@ export default function HomeScreen() {
             </TouchableOpacity>
           </View>
         </View>
+        </View>
       </View>
 
       {user ? (
-        <View style={styles.balanceOuter}>
+        <View style={[styles.pageMax, { maxWidth: contentMaxWidth }]}>
+        <View style={[styles.balanceOuter, { marginHorizontal: contentHorizontalInset }]}>
           <View style={styles.balanceSection}>
             <View style={styles.balanceLeft}>
               <TouchableOpacity style={styles.balanceLabelRow} onPress={() => setShowWallet(true)}>
@@ -347,12 +476,14 @@ export default function HomeScreen() {
             </TouchableOpacity>
           </View>
         </View>
+        </View>
       ) : null}
 
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
+        <View style={[styles.pageMax, { maxWidth: contentMaxWidth, paddingHorizontal: contentHorizontalInset }]}>
         {/* Connected Therapist Banner */}
         {activeBooking && (
           <View style={styles.connectedBanner}>
@@ -374,23 +505,32 @@ export default function HomeScreen() {
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>{strings.services}</Text>
         </View>
-        <View style={styles.gridContainer}>
+        <View style={[styles.gridContainer, tabletLayout.isTablet && { height: gridHeight, gap: gridGap }]}>
           {/* Large card — Massage tại nhà */}
           <TouchableOpacity style={styles.gridCardLarge} activeOpacity={0.85} onPress={() => setShowMassageHome(true)}>
             <Image
               source={require('@/assets/images/massage-home-banner.png')}
               style={{ width: '100%', height: '100%' }}
-              resizeMode="cover"
+              resizeMode={cardImageResizeMode}
             />
           </TouchableOpacity>
 
           {/* Right column — 2 smaller cards */}
-          <View style={styles.gridColRight}>
-            <TouchableOpacity style={styles.gridCardSmallImg} activeOpacity={0.85} onPress={() => setShowMassageLocation(true)}>
+          <View
+            style={[
+              tabletLayout.isTablet ? styles.gridColRightTablet : styles.gridColRight,
+              { width: rightColumnWidth, gap: gridGap },
+            ]}
+          >
+            <TouchableOpacity
+              style={tabletLayout.isTablet ? styles.gridCardSmallImgTablet : styles.gridCardSmallImg}
+              activeOpacity={0.85}
+              onPress={() => setShowMassageLocation(true)}
+            >
               <Image
                 source={require('@/assets/images/promo-location-banner.png')}
                 style={{ width: '100%', height: '100%' }}
-                resizeMode="cover"
+                resizeMode={cardImageResizeMode}
               />
             </TouchableOpacity>
 
@@ -434,18 +574,31 @@ export default function HomeScreen() {
             <Text style={styles.therapistEmptyText}>{strings.noTherapistsInCity}</Text>
           </View>
         ) : (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.featuredScrollContent}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={[styles.featuredScrollContent, { gap: gridGap }]}
+          >
             {visibleFeaturedTherapists.map((t) => {
               const distText = t.distanceFromCenter < 1
                 ? `${Math.round(t.distanceFromCenter * 1000)}m`
                 : `${t.distanceFromCenter} km`;
               return (
-                <TouchableOpacity key={t.id} style={styles.featuredCard} activeOpacity={0.85} onPress={() => setShowMassageHome(true)}>
+                <TouchableOpacity
+                  key={t.id}
+                  style={[styles.featuredCard, { width: featuredCardWidth }]}
+                  activeOpacity={0.85}
+                  onPress={() => setShowMassageHome(true)}
+                >
                   <View style={styles.featuredAvatarWrap}>
                     <View style={styles.featuredAvatar}>
-                      <Text style={styles.featuredAvatarText}>
-                        {t.gender === 'female' ? '👩' : '👨'}
-                      </Text>
+                      {t.avatar?.startsWith('http') ? (
+                        <Image source={{ uri: t.avatar }} style={styles.featuredAvatarImage} />
+                      ) : (
+                        <Text style={styles.featuredAvatarText}>
+                          {t.gender === 'female' ? '👩' : '👨'}
+                        </Text>
+                      )}
                     </View>
                     {t.rating >= 4.8 && (
                       <View style={styles.featuredBadge}>
@@ -471,54 +624,9 @@ export default function HomeScreen() {
 
         {/* Bottom spacer */}
         <View style={{ height: 80 }} />
+        </View>
       </ScrollView>
 
-      {/* Support Button */}
-      <TouchableOpacity
-        style={styles.supportButton}
-        activeOpacity={1}
-        onPress={() => setShowSupportModal(true)}
-      >
-        <Text style={styles.supportButtonIcon}>💬</Text>
-        <Text style={styles.supportButtonText}>{strings.support}</Text>
-      </TouchableOpacity>
-
-      {/* Support Modal */}
-      <Modal visible={showSupportModal} transparent animationType="slide">
-        <View style={styles.modalContainer}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>{strings.supportChannels}</Text>
-              <TouchableOpacity onPress={() => setShowSupportModal(false)}>
-                <Text style={styles.closeButton}>✕</Text>
-              </TouchableOpacity>
-            </View>
-
-            <FlatList
-              data={supportChannels}
-              keyExtractor={(item) => item.id}
-              renderItem={({ item }) => (
-                <TouchableOpacity
-                  style={styles.supportChannelItem}
-                  onPress={() => handleSelectSupport(item)}
-                >
-                  <View style={[styles.supportIconBox, { backgroundColor: item.color }]}>
-                    {item.iconType === 'zalo' ? (
-                      <Image source={require('@/assets/images/zalo-logo.png')} style={{ width: 36, height: 36 }} resizeMode="contain" />
-                    ) : item.iconType === 'fa5' ? (
-                      <FontAwesome5 name={item.iconName} size={22} color="#fff" />
-                    ) : (
-                      <Text style={[styles.supportIconText, item.iconColor ? { color: item.iconColor } : undefined]}>{item.iconName}</Text>
-                    )}
-                  </View>
-                  <Text style={styles.supportChannelName}>{item.name}</Text>
-                  <Text style={styles.supportChevron}>›</Text>
-                </TouchableOpacity>
-              )}
-            />
-          </View>
-        </View>
-      </Modal>
 
       <Modal visible={showCityPicker} transparent animationType="slide" onRequestClose={() => setShowCityPicker(false)}>
         <View style={styles.modalContainer}>
@@ -651,6 +759,10 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: COLORS.bg,
   },
+  pageMax: {
+    width: '100%',
+    alignSelf: 'center',
+  },
 
   heroBlue: {
     backgroundColor: COLORS.primary,
@@ -658,13 +770,11 @@ const styles = StyleSheet.create({
     borderBottomRightRadius: 28,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: 'rgba(255,255,255,0.38)',
-    paddingHorizontal: 16,
     paddingBottom: 18,
     overflow: 'hidden',
   },
 
   balanceOuter: {
-    marginHorizontal: 16,
     marginTop: 12,
     marginBottom: 4,
   },
@@ -751,7 +861,7 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: '#E8B4B8',
+    borderColor: AppColors.border,
     borderRadius: 20,
   },
   balanceLeft: {
@@ -793,7 +903,6 @@ const styles = StyleSheet.create({
 
   // --- Scroll Content ---
   scrollContent: {
-    padding: 16,
     paddingTop: 10,
     paddingBottom: 100,
   },
@@ -828,9 +937,14 @@ const styles = StyleSheet.create({
     flex: 1,
     borderRadius: 18,
     overflow: 'hidden',
+    backgroundColor: '#FFFFFF',
   },
   gridColRight: {
-    width: (Dimensions.get('window').width - 44) * 0.42,
+    width: '42%',
+    gap: 12,
+  },
+  gridColRightTablet: {
+    flex: 1,
     gap: 12,
   },
   gridCardSmall: {
@@ -842,6 +956,13 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     overflow: 'hidden',
     aspectRatio: 960 / 600,
+  },
+  gridCardSmallImgTablet: {
+    flex: 1,
+    borderRadius: 16,
+    overflow: 'hidden',
+    backgroundColor: '#FFFFFF',
+    minHeight: 110,
   },
   gridCardBg: {
     flex: 1,
@@ -921,7 +1042,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: '#E8B4B8',
+    borderColor: AppColors.border,
   },
   tagEmoji: {
     fontSize: 16,
@@ -952,7 +1073,7 @@ const styles = StyleSheet.create({
     padding: 14,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#E8B4B8',
+    borderColor: AppColors.border,
   },
   featuredAvatarWrap: {
     position: 'relative',
@@ -962,9 +1083,14 @@ const styles = StyleSheet.create({
     width: 60,
     height: 60,
     borderRadius: 30,
-    backgroundColor: '#FFEBEE',
+    backgroundColor: AppColors.primarySoft2,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  featuredAvatarImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 30,
   },
   featuredAvatarText: {
     fontSize: 30,
@@ -1029,9 +1155,6 @@ const styles = StyleSheet.create({
 
   // --- Support Button ---
   supportButton: {
-    position: 'absolute',
-    right: 16,
-    bottom: 18,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
@@ -1039,6 +1162,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderRadius: 24,
+  },
+  supportButtonDragLayer: {
+    position: 'absolute',
+    zIndex: 50,
   },
   supportButtonIcon: {
     fontSize: 18,
@@ -1052,7 +1179,7 @@ const styles = StyleSheet.create({
   // --- Modal ---
   modalContainer: {
     flex: 1,
-    backgroundColor: 'rgba(55, 10, 18, 0.38)',
+    backgroundColor: 'rgba(60, 45, 35, 0.38)',
     justifyContent: 'flex-end',
   },
   modalContent: {
@@ -1079,7 +1206,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFF0F0',
+    backgroundColor: AppColors.primarySoft2,
     borderRadius: 16,
     paddingHorizontal: 10,
     gap: 8,
@@ -1105,13 +1232,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#E8B4B8',
-    backgroundColor: '#FFF5F5',
+    borderColor: AppColors.border,
+    backgroundColor: AppColors.white,
     marginBottom: 8,
   },
   cityItemActive: {
-    backgroundColor: '#E53935',
-    borderColor: '#E53935',
+    backgroundColor: AppColors.primaryDark,
+    borderColor: AppColors.primaryDark,
   },
   cityItemText: {
     fontSize: 14,
@@ -1197,10 +1324,10 @@ const styles = StyleSheet.create({
   therapistCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFFBFB',
+    backgroundColor: AppColors.white,
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: '#E8B4B8',
+    borderColor: AppColors.border,
     padding: 14,
     marginBottom: 12,
     shadowColor: '#0A2540',
@@ -1213,10 +1340,15 @@ const styles = StyleSheet.create({
     width: 56,
     height: 56,
     borderRadius: 28,
-    backgroundColor: '#FFEBEE',
+    backgroundColor: AppColors.primarySoft2,
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 12,
+  },
+  therapistAvatarImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 28,
   },
   therapistAvatarText: {
     fontSize: 28,
@@ -1244,7 +1376,7 @@ const styles = StyleSheet.create({
   availableBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFCDD2',
+    backgroundColor: AppColors.accentSoft,
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderRadius: 12,
@@ -1254,12 +1386,12 @@ const styles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: '#C62828',
+    backgroundColor: AppColors.accent,
   },
   availableText: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#C62828',
+    color: AppColors.primaryDark,
   },
   therapistPrice: {
     fontSize: 13,
@@ -1333,13 +1465,13 @@ const styles = StyleSheet.create({
   connectedStatus: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#C62828',
+    color: AppColors.primaryDark,
   },
   connectedMsgBtn: {
     width: 38,
     height: 38,
     borderRadius: 19,
-    backgroundColor: '#FFCDD2',
+    backgroundColor: AppColors.primarySoft,
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 8,

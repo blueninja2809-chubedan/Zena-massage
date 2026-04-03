@@ -16,6 +16,7 @@ export type BookingStatus = 'pending' | 'confirmed' | 'in-progress' | 'completed
 
 export interface SharedBooking {
   id: string;
+  customerUserId?: string;
   customerName: string;
   customerPhone: string;
   therapistId: string;
@@ -70,6 +71,7 @@ function toSharedBooking(item: Record<string, unknown> & { id: string }): Shared
   }
   return {
     id: item.id,
+    customerUserId: typeof item.customerUserId === 'string' ? item.customerUserId : undefined,
     customerName: String(item.customerName ?? ''),
     customerPhone: item.customerPhone,
     therapistId: item.therapistId,

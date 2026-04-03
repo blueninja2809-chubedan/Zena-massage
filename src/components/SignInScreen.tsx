@@ -1,35 +1,35 @@
-import { useLanguage } from '@/contexts/LanguageContext';
 import type { OnboardingLanguage } from '@/components/Onboarding';
-import { UserData, useUser } from '@/contexts/UserContext';
 import { PhoneCountryField } from '@/components/PhoneCountryField';
-import type { CountryDial } from '@/constants/countryDialData';
 import { SocialAuthButtons } from '@/components/SocialAuthButtons';
+import { AppColors } from '@/constants/appColors';
+import type { CountryDial } from '@/constants/countryDialData';
+import { useLanguage } from '@/contexts/LanguageContext';
+import { UserData, useUser } from '@/contexts/UserContext';
 import { nationalDigitsToAppPhone } from '@/lib/phoneCountry';
 import { getLatestPartnerApplicationByUserId, signInUserAccountWithPhone } from '@/lib/supabaseService';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import React, { useCallback, useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
-  KeyboardAvoidingView,
-  Platform,
-  ScrollView,
-  StatusBar,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
+    ActivityIndicator,
+    Alert,
+    KeyboardAvoidingView,
+    Platform,
+    StatusBar,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    useWindowDimensions,
+    View,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { AppColors } from '@/constants/appColors';
 
 const COLORS = {
-  primary: AppColors.primary,
+  primary: AppColors.primaryDark,
   primaryDeep: AppColors.primaryDark,
   primaryMuted: AppColors.primaryMuted,
-  bg: '#FAFBFD',
+  bg: AppColors.bg,
   text: AppColors.text,
   textSecondary: AppColors.textMuted,
   muted: '#94A3B8',
@@ -82,10 +82,14 @@ async function applyPartnerAlerts(
 }
 
 export function SignInScreen({ onBack, onNavigateSignUp }: SignInScreenProps) {
+  const { height: screenHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const { setUser } = useUser();
   const { language, setLanguage } = useLanguage();
   const isEn = language === 'en';
+  const isCompact = screenHeight <= 740;
+  const isLarge = screenHeight >= 900;
+  const topPull = insets.top >= 44 ? 6 : insets.top >= 20 ? 4 : 2;
 
   const [countryCode, setCountryCode] = useState('VN');
   const [callingCode, setCallingCode] = useState('84');
@@ -162,42 +166,36 @@ export function SignInScreen({ onBack, onNavigateSignUp }: SignInScreenProps) {
   const busy = loading;
 
   return (
-    <SafeAreaView style={styles.safe} edges={['left', 'right', 'bottom']}>
+    <SafeAreaView style={styles.safe} edges={['top', 'left', 'right', 'bottom']}>
       <StatusBar barStyle="dark-content" />
+      <View style={[styles.topTint, { height: insets.top + 2 }]} />
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView
-          contentContainerStyle={styles.scroll}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
+        <View style={styles.scroll}>
           <LinearGradient
-            colors={['#FFCDD2', '#FFF0EE', '#FFF5F5', '#FFFCF9']}
+            colors={[AppColors.accentSoft, AppColors.primarySoft2, AppColors.bg, AppColors.white]}
             locations={[0, 0.35, 0.72, 1]}
-            style={[styles.gradient, { paddingTop: insets.top + 6 }]}
+            style={[styles.gradient, isCompact && styles.gradientCompact, isLarge && styles.gradientLarge]}
           >
             <View style={styles.orbWrap} pointerEvents="none">
               <View style={[styles.orb, styles.orbA]} />
               <View style={[styles.orb, styles.orbB]} />
             </View>
 
-            <View style={styles.topBar}>
-              <TouchableOpacity style={styles.iconBtn} onPress={onBack} hitSlop={10} accessibilityRole="button">
-                <Ionicons name="close" size={22} color={COLORS.textSecondary} />
-              </TouchableOpacity>
+            <View style={[styles.topBar, { marginTop: topPull }]}>
               <TouchableOpacity style={styles.langPill} onPress={toggleLang} activeOpacity={0.85}>
                 <Text style={styles.langFlag}>{language === 'vi' ? '🇻🇳' : '🇬🇧'}</Text>
                 <Text style={styles.langText}>{language === 'vi' ? 'VI' : 'EN'}</Text>
               </TouchableOpacity>
             </View>
 
-            <View style={styles.hero}>
+            <View style={[styles.hero, isCompact && styles.heroCompact]}>
               <Text style={styles.heroGreeting}>
                 {isEn ? 'Welcome back to ' : 'Chào mừng trở lại với '}
                 <Text style={styles.heroBrand}>Zena</Text>
               </Text>
             </View>
 
-            <View style={styles.card}>
+            <View style={[styles.card, isCompact && styles.cardCompact, isLarge && styles.cardLarge]}>
               <SocialAuthButtons isEn={isEn} onUserReady={handleOAuthUser} />
 
               <View style={styles.orRow}>
@@ -264,20 +262,20 @@ export function SignInScreen({ onBack, onNavigateSignUp }: SignInScreenProps) {
               </TouchableOpacity>
             </View>
 
-            <View style={styles.footerRow}>
+            <View style={[styles.footerRow, isCompact && styles.footerRowCompact]}>
               <Text style={styles.footerMuted}>{isEn ? "Don't have an account? " : 'Bạn chưa có tài khoản? '}</Text>
               <TouchableOpacity onPress={onNavigateSignUp} disabled={busy}>
                 <Text style={styles.footerLink}>{isEn ? 'Sign up' : 'Đăng ký'}</Text>
               </TouchableOpacity>
             </View>
 
-            <Text style={styles.legal}>
-              {isEn ? 'By continuing, you agree to our ' : 'Bằng cách tiếp tục, bạn đồng ý với '}
+            <Text style={[styles.legal, isCompact && styles.legalCompact]}>
+              {isEn ? 'By continuing, you agree to our ' : 'Tiếp tục là đồng ý '}
               <Text style={styles.legalLink}>{isEn ? 'Terms & Policy' : 'Điều khoản & Chính sách'}</Text>
               .
             </Text>
           </LinearGradient>
-        </ScrollView>
+        </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -285,11 +283,27 @@ export function SignInScreen({ onBack, onNavigateSignUp }: SignInScreenProps) {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: COLORS.bg },
-  scroll: { paddingBottom: 48 },
+  topTint: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: AppColors.primarySoft,
+    zIndex: 0,
+  },
+  scroll: { flex: 1 },
   gradient: {
     flexGrow: 1,
     paddingHorizontal: 20,
+    paddingTop: 0,
+    marginTop: 0,
     overflow: 'hidden',
+  },
+  gradientCompact: {
+    paddingHorizontal: 16,
+  },
+  gradientLarge: {
+    paddingHorizontal: 22,
   },
   orbWrap: {
     ...StyleSheet.absoluteFillObject,
@@ -313,29 +327,14 @@ const styles = StyleSheet.create({
     left: -80,
     backgroundColor: 'rgba(120, 190, 185, 0.22)',
   },
-  /** Một hàng cố định chiều cao — hai nút cùng 44px, căn giữa trục dọc, lệch trái/phải đều với padding ngang màn hình. */
+  /** Thanh trên: chỉ nút ngôn ngữ (bên phải). */
   topBar: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-end',
     alignItems: 'center',
     height: 44,
-    marginBottom: 12,
+    marginBottom: 4,
     zIndex: 1,
-  },
-  iconBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(255,255,255,0.92)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.95)',
-    shadowColor: '#0F172A',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.07,
-    shadowRadius: 8,
-    elevation: 3,
   },
   langPill: {
     flexDirection: 'row',
@@ -361,8 +360,11 @@ const styles = StyleSheet.create({
   hero: {
     alignItems: 'flex-start',
     alignSelf: 'stretch',
-    marginBottom: 20,
+    marginBottom: 8,
     zIndex: 1,
+  },
+  heroCompact: {
+    marginBottom: 4,
   },
   heroGreeting: {
     alignSelf: 'stretch',
@@ -391,6 +393,16 @@ const styles = StyleSheet.create({
     shadowRadius: 28,
     elevation: 6,
     zIndex: 1,
+  },
+  cardCompact: {
+    borderRadius: 22,
+    paddingHorizontal: 16,
+    paddingTop: 24,
+    paddingBottom: 18,
+  },
+  cardLarge: {
+    paddingTop: 34,
+    paddingBottom: 28,
   },
   btnDisabled: { opacity: 0.55 },
   orRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 18, marginTop: 8 },
@@ -460,6 +472,9 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     zIndex: 1,
   },
+  footerRowCompact: {
+    marginTop: 18,
+  },
   footerMuted: { fontSize: 14, color: COLORS.textSecondary },
   footerLink: { fontSize: 14, fontWeight: '800', color: COLORS.primaryDeep },
   legal: {
@@ -470,6 +485,9 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     paddingHorizontal: 12,
     zIndex: 1,
+  },
+  legalCompact: {
+    marginTop: 14,
   },
   legalLink: { fontWeight: '700', color: COLORS.primaryDeep },
 });

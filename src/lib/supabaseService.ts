@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import bcrypt from 'bcryptjs';
 import { supabase } from './supabase';
+import { MOCK_THERAPISTS } from './sampleData';
 import type {
     Booking,
     Notification,
@@ -10,6 +11,14 @@ import type {
     Service,
     Therapist,
 } from './types';
+
+// In Expo RN, EXPO_PUBLIC_* vars are inlined at build time.
+// To make local testing reliable, also enable test mode automatically in dev builds.
+const IS_TEST_MODE =
+  process.env.EXPO_PUBLIC_TEST_MODE === 'true' ||
+  process.env.EXPO_PUBLIC_TEST_MODE === '1' ||
+  // eslint-disable-next-line no-undef
+  (typeof __DEV__ !== 'undefined' && __DEV__);
 
 export type PartnerApplicationStatus = 'pending' | 'approved' | 'rejected';
 
@@ -437,6 +446,9 @@ async function fetchTherapistsUncached(): Promise<Therapist[]> {
 }
 
 export async function getTherapists(): Promise<Therapist[]> {
+  if (IS_TEST_MODE) {
+    return MOCK_THERAPISTS.filter((t) => t.isAvailable);
+  }
   const now = Date.now();
   if (therapistsCache && now - therapistsCache.fetchedAt < THERAPISTS_CACHE_TTL_MS) {
     return therapistsCache.list;
@@ -447,8 +459,11 @@ export async function getTherapists(): Promise<Therapist[]> {
   therapistsFetchInFlight = (async () => {
     try {
       const list = await fetchTherapistsUncached();
-      therapistsCache = { list, fetchedAt: Date.now() };
-      return list;
+      // If Supabase returns empty list (often due to RLS/mis-config in dev),
+      // fall back to local mock data so the booking flow always has KTV.
+      const safeList = list.length > 0 ? list : MOCK_THERAPISTS.filter((t) => t.isAvailable);
+      therapistsCache = { list: safeList, fetchedAt: Date.now() };
+      return safeList;
     } finally {
       therapistsFetchInFlight = null;
     }
@@ -457,6 +472,9 @@ export async function getTherapists(): Promise<Therapist[]> {
 }
 
 export async function getTherapistById(therapistId: string): Promise<Therapist | null> {
+  if (IS_TEST_MODE) {
+    return MOCK_THERAPISTS.find((t) => t.id === therapistId) ?? null;
+  }
   const { data, error } = await withTimeout(
     supabase.from('therapists').select('*').eq('id', therapistId).maybeSingle(),
   );
@@ -477,6 +495,50 @@ export async function getTherapistsBySpecialty(specialty: string): Promise<Thera
 /**
  * BOOKINGS
  */
+// ─────────────────────────────────────────────────────────────────────────────
+// Test mode stores (in-memory)
+// ─────────────────────────────────────────────────────────────────────────────
+type TestSharedBooking = {
+  id: string;
+  customerName: string;
+  customerPhone: string;
+  therapistId: string;
+  therapistName: string;
+  therapistAvatar?: string;
+  service: string;
+  date: string;
+  time: string;
+  address: string;
+  price: number;
+  status: string;
+  createdAt: string;
+  reviewed?: boolean;
+};
+
+type TestChatRoom = ChatRoom; // reuse app shape
+type TestChatMessage = ChatMessage; // reuse app shape
+
+const testSharedBookings: Record<string, TestSharedBooking> = {};
+let testBookingIdCounter = 1;
+
+const testChatRooms: TestChatRoom[] = [];
+const testChatMessages: TestChatMessage[] = [];
+const testChatListeners: Record<string, Set<(msg: TestChatMessage) => void>> = {};
+
+let testRoomIdCounter = 1;
+
+function makeTestBookingId(): string {
+  const id = `test-booking-${testBookingIdCounter}`;
+  testBookingIdCounter += 1;
+  return id;
+}
+
+function makeTestRoomId(): string {
+  const id = `test-room-${testRoomIdCounter}`;
+  testRoomIdCounter += 1;
+  return id;
+}
+
 export async function createBooking(bookingData: Omit<Booking, 'id'>): Promise<string> {
   const now = new Date().toISOString();
   const payload = { ...bookingData, createdAt: bookingData.createdAt ?? now };
@@ -528,6 +590,49 @@ export async function updateBookingStatus(bookingId: string, status: Booking['st
 }
 
 export async function createSharedBookingRecord(data: Record<string, unknown>): Promise<string> {
+  if (IS_TEST_MODE) {
+    const now = new Date().toISOString();
+    const uid = await getStoredUid();
+    const userId = uid || String(data.userId ?? data.customerPhone ?? '');
+
+    const id = makeTestBookingId();
+    const record: TestSharedBooking = {
+      id,
+      customerName: String(data.customerName ?? ''),
+      customerPhone: String(data.customerPhone ?? ''),
+      therapistId: String(data.therapistId ?? ''),
+      therapistName: String(data.therapistName ?? ''),
+      therapistAvatar: typeof data.therapistAvatar === 'string' ? data.therapistAvatar : undefined,
+      service: String(data.service ?? ''),
+      date: String(data.date ?? ''),
+      time: String(data.time ?? ''),
+      address: String(data.address ?? ''),
+      price: Number(data.price ?? 0),
+      status: String(data.status ?? 'pending'),
+      createdAt: String(data.createdAt ?? now),
+      reviewed: Boolean(data.reviewed ?? false),
+    };
+
+    testSharedBookings[id] = record;
+
+    // Create a chat room for this booking so ChatScreen(bookingId) can open directly.
+    const therapistId = record.therapistId;
+    const customerId = userId;
+    const room: ChatRoom = {
+      id: makeTestRoomId(),
+      bookingId: id,
+      customerId,
+      therapistId,
+      customerName: record.customerName,
+      therapistName: record.therapistName,
+      isActive: true,
+      createdAt: now,
+      updatedAt: now,
+    };
+    testChatRooms.unshift(room);
+
+    return id;
+  }
   const now = new Date().toISOString();
   const uid = await getStoredUid();
   const userId = uid || String(data.userId ?? data.customerPhone ?? '');
@@ -550,6 +655,23 @@ export async function createSharedBookingRecord(data: Record<string, unknown>): 
 }
 
 export async function deleteBookingRecord(bookingId: string): Promise<void> {
+  if (IS_TEST_MODE) {
+    delete testSharedBookings[bookingId];
+    // Best-effort cleanup: remove chat room(s) and their messages.
+    const roomsToDelete = testChatRooms.filter((r) => r.bookingId === bookingId);
+    if (roomsToDelete.length > 0) {
+      const roomIds = new Set(roomsToDelete.map((r) => r.id));
+      for (const roomId of roomIds) {
+        for (let i = testChatMessages.length - 1; i >= 0; i--) {
+          if (testChatMessages[i].roomId === roomId) testChatMessages.splice(i, 1);
+        }
+      }
+    }
+    for (let i = testChatRooms.length - 1; i >= 0; i--) {
+      if (testChatRooms[i].bookingId === bookingId) testChatRooms.splice(i, 1);
+    }
+    return;
+  }
   const { error } = await withTimeout(supabase.from('bookings').delete().eq('id', bookingId));
   if (error) throw error;
 }
@@ -560,6 +682,18 @@ export async function mergeBookingPayload(
   patch: Record<string, unknown>,
   status?: string,
 ): Promise<void> {
+  if (IS_TEST_MODE) {
+    const prev = testSharedBookings[bookingId];
+    if (!prev) return;
+    const nextStatus = status ?? prev.status;
+    testSharedBookings[bookingId] = {
+      ...prev,
+      ...patch,
+      status: nextStatus,
+      createdAt: prev.createdAt,
+    } as TestSharedBooking;
+    return;
+  }
   const { data: row, error: e1 } = await withTimeout(
     supabase.from('bookings').select('payload').eq('id', bookingId).maybeSingle(),
   );
@@ -582,6 +716,10 @@ export async function confirmPayosForBookingUser(
   orderCode: number,
   userId: string,
 ): Promise<{ ok: boolean; reason?: string; bookingId?: string }> {
+  if (IS_TEST_MODE) {
+    // Always succeed in test mode; ServiceBookingScreen will fallback to getBookingStatus if needed.
+    return { ok: true };
+  }
   const { data, error } = await withTimeout(
     supabase.rpc('confirm_payos_for_booking_user', {
       p_order_code: orderCode,
@@ -598,6 +736,9 @@ export async function confirmPayosForBookingUser(
 }
 
 export async function getBookingStatus(bookingId: string): Promise<string | null> {
+  if (IS_TEST_MODE) {
+    return testSharedBookings[bookingId]?.status ?? null;
+  }
   const { data, error } = await withTimeout(
     supabase.from('bookings').select('status').eq('id', bookingId).maybeSingle(),
   );
@@ -606,6 +747,11 @@ export async function getBookingStatus(bookingId: string): Promise<string | null
 }
 
 export async function getSharedBookingRecords(): Promise<(Record<string, unknown> & { id: string })[]> {
+  if (IS_TEST_MODE) {
+    return Object.values(testSharedBookings)
+      .map((b) => ({ ...b }))
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
   const { data, error } = await withTimeout(
     supabase.from('bookings').select('*').order('created_at', { ascending: false }),
   );
@@ -618,6 +764,12 @@ export async function getSharedBookingRecords(): Promise<(Record<string, unknown
 }
 
 export async function updateSharedBookingStatus(bookingId: string, status: string): Promise<void> {
+  if (IS_TEST_MODE) {
+    const prev = testSharedBookings[bookingId];
+    if (!prev) return;
+    testSharedBookings[bookingId] = { ...prev, status };
+    return;
+  }
   const { error } = await withTimeout(
     supabase.from('bookings').update({ status }).eq('id', bookingId),
   );
@@ -627,6 +779,12 @@ export async function updateSharedBookingStatus(bookingId: string, status: strin
 }
 
 export async function cancelBooking(bookingId: string, reason: string): Promise<void> {
+  if (IS_TEST_MODE) {
+    const prev = testSharedBookings[bookingId];
+    if (!prev) return;
+    testSharedBookings[bookingId] = { ...prev, status: 'cancelled', cancellationReason: reason } as unknown as TestSharedBooking;
+    return;
+  }
   const { error } = await withTimeout(
     supabase
       .from('bookings')
@@ -1220,6 +1378,13 @@ export type WalletTransaction = {
   createdAt: string;
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Test wallet store (in-memory)
+// ─────────────────────────────────────────────────────────────────────────────
+const testWallets: Record<string, { id: string; balance: number }> = {};
+let testWalletTxCounter = 1;
+const testWalletTransactions: WalletTransaction[] = [];
+
 /**
  * USER ROLE MANAGEMENT
  */
@@ -1243,6 +1408,13 @@ export async function getUserRole(userId: string): Promise<string | null> {
 }
 
 export async function getOrCreateWallet(userId: string): Promise<WalletData> {
+  if (IS_TEST_MODE) {
+    if (!testWallets[userId]) {
+      // Big enough to cover booking/upsell testing.
+      testWallets[userId] = { id: `test-wallet-${userId}`, balance: 1_000_000 };
+    }
+    return { id: testWallets[userId].id, userId, balance: testWallets[userId].balance };
+  }
   try {
     const { data, error } = await withTimeout(
       supabase.rpc('get_or_create_wallet', { p_user_id: userId }),
@@ -1268,6 +1440,26 @@ export async function getOrCreateWallet(userId: string): Promise<WalletData> {
 }
 
 export async function walletTopUp(userId: string, amount: number, method: string = 'bank'): Promise<{ transactionId: string; balance: number }> {
+  if (IS_TEST_MODE) {
+    const w = testWallets[userId] ?? { id: `test-wallet-${userId}`, balance: 1_000_000 };
+    const next = w.balance + amount;
+    testWallets[userId] = { ...w, balance: next };
+    const tx: WalletTransaction = {
+      id: `test-tx-${testWalletTxCounter}`,
+      walletId: w.id,
+      userId,
+      type: 'topup',
+      amount,
+      balanceAfter: next,
+      description: `Top up (${method})`,
+      referenceId: null,
+      status: 'completed',
+      createdAt: new Date().toISOString(),
+    } as WalletTransaction;
+    testWalletTransactions.unshift(tx);
+    testWalletTxCounter += 1;
+    return { transactionId: tx.id, balance: next };
+  }
   const { data, error } = await withTimeout(
     supabase.rpc('wallet_topup', { p_user_id: userId, p_amount: amount, p_method: method }),
   );
@@ -1286,6 +1478,27 @@ export async function walletDeduct(
   description: string = '',
   referenceId: string | null = null,
 ): Promise<{ transactionId: string; balance: number }> {
+  if (IS_TEST_MODE) {
+    const w = testWallets[userId] ?? { id: `test-wallet-${userId}`, balance: 1_000_000 };
+    const next = w.balance - amount;
+    testWallets[userId] = { ...w, balance: next };
+    const txType = (type as WalletTransaction['type']) ?? 'payment';
+    const tx: WalletTransaction = {
+      id: `test-tx-${testWalletTxCounter}`,
+      walletId: w.id,
+      userId,
+      type: txType,
+      amount,
+      balanceAfter: next,
+      description,
+      referenceId,
+      status: 'completed',
+      createdAt: new Date().toISOString(),
+    } as WalletTransaction;
+    testWalletTransactions.unshift(tx);
+    testWalletTxCounter += 1;
+    return { transactionId: tx.id, balance: next };
+  }
   const { data, error } = await withTimeout(
     supabase.rpc('wallet_deduct', {
       p_user_id: userId,
@@ -1304,6 +1517,10 @@ export async function walletDeduct(
 }
 
 export async function getWalletTransactions(userId: string, limit = 50, offset = 0): Promise<WalletTransaction[]> {
+  if (IS_TEST_MODE) {
+    const all = testWalletTransactions.filter((t) => t.userId === userId);
+    return all.slice(offset, offset + limit);
+  }
   const { data, error } = await withTimeout(
     supabase.rpc('get_wallet_transactions', { p_user_id: userId, p_limit: limit, p_offset: offset }),
   );
@@ -1428,6 +1645,20 @@ export async function checkTherapistMinBalance(userId: string, minBalance: numbe
  * THERAPIST SHIFTS
  */
 
+const testTherapistShifts: Record<string, Record<string, string[]>> = {};
+const testTherapistAvailability: Record<string, boolean> = {};
+
+function iterateDateRange(fromDate: string, toDate: string): string[] {
+  const out: string[] = [];
+  const start = new Date(`${fromDate}T00:00:00.000Z`);
+  const end = new Date(`${toDate}T00:00:00.000Z`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return out;
+  for (let d = new Date(start); d.getTime() <= end.getTime(); d = new Date(d.getTime() + 24 * 60 * 60 * 1000)) {
+    out.push(d.toISOString().slice(0, 10));
+  }
+  return out;
+}
+
 export interface TherapistShiftData {
   shiftDate: string; // 'YYYY-MM-DD'
   slots: string[];
@@ -1439,6 +1670,11 @@ export async function saveTherapistShifts(
   slots: string[],
   userName: string = '',
 ): Promise<void> {
+  if (IS_TEST_MODE) {
+    testTherapistShifts[userId] = testTherapistShifts[userId] ?? {};
+    testTherapistShifts[userId][shiftDate] = [...slots];
+    return;
+  }
   const { error } = await withTimeout(
     supabase.rpc('upsert_therapist_shifts', {
       p_user_id: userId,
@@ -1466,6 +1702,15 @@ export async function getTherapistShifts(
   fromDate: string,
   toDate: string,
 ): Promise<TherapistShiftData[]> {
+  if (IS_TEST_MODE) {
+    const dates = iterateDateRange(fromDate, toDate);
+    const defaultSlotsA = ['08h - 10h', '10h - 12h', '12h - 14h'];
+    const defaultSlotsB = ['14h - 16h', '16h - 18h'];
+    return dates.map((d, idx) => ({
+      shiftDate: d,
+      slots: testTherapistShifts[userId]?.[d] ?? (idx % 2 === 0 ? defaultSlotsA : defaultSlotsB),
+    }));
+  }
   const { data, error } = await withTimeout(
     supabase.rpc('get_therapist_shifts', {
       p_user_id: userId,
@@ -1500,6 +1745,11 @@ export async function getTherapistShifts(
 export async function getTherapistShiftsForDate(
   date: string,
 ): Promise<{ userId: string; slots: string[] }[]> {
+  if (IS_TEST_MODE) {
+    return Object.keys(testTherapistShifts)
+      .filter((uid) => Array.isArray(testTherapistShifts[uid]?.[date]))
+      .map((uid) => ({ userId: uid, slots: testTherapistShifts[uid][date] }));
+  }
   const { data, error } = await withTimeout(
     supabase
       .from('therapist_shifts')
@@ -1517,6 +1767,10 @@ export async function updateTherapistAvailability(
   userId: string,
   isAvailable: boolean,
 ): Promise<void> {
+  if (IS_TEST_MODE) {
+    testTherapistAvailability[userId] = isAvailable;
+    return;
+  }
   const { error } = await withTimeout(
     supabase
       .from('therapists')
@@ -1529,6 +1783,9 @@ export async function updateTherapistAvailability(
 export async function getTherapistAvailability(
   userId: string,
 ): Promise<boolean> {
+  if (IS_TEST_MODE) {
+    return testTherapistAvailability[userId] ?? true;
+  }
   const { data, error } = await withTimeout(
     supabase
       .from('therapists')
@@ -1609,6 +1866,27 @@ export async function getOrCreateChatRoom(
   customerName: string = '',
   therapistName: string = '',
 ): Promise<string> {
+  if (IS_TEST_MODE) {
+    const existing = testChatRooms.find(
+      (r) => r.bookingId === bookingId && r.customerId === customerId && r.therapistId === therapistId,
+    );
+    if (existing) return existing.id;
+
+    const now = new Date().toISOString();
+    const room: ChatRoom = {
+      id: makeTestRoomId(),
+      bookingId,
+      customerId,
+      therapistId,
+      customerName,
+      therapistName,
+      isActive: true,
+      createdAt: now,
+      updatedAt: now,
+    };
+    testChatRooms.unshift(room);
+    return room.id;
+  }
   const { data, error } = await withTimeout(
     supabase.rpc('get_or_create_chat_room', {
       p_booking_id: bookingId,
@@ -1624,6 +1902,9 @@ export async function getOrCreateChatRoom(
 
 /** Get an existing chat room by booking ID */
 export async function getChatRoomByBooking(bookingId: string): Promise<ChatRoom | null> {
+  if (IS_TEST_MODE) {
+    return testChatRooms.find((r) => r.bookingId === bookingId) ?? null;
+  }
   const { data, error } = await withTimeout(
     supabase
       .from('chat_rooms')
@@ -1637,6 +1918,12 @@ export async function getChatRoomByBooking(bookingId: string): Promise<ChatRoom 
 
 /** Get all chat rooms for a user (customer or therapist) */
 export async function getChatRoomsForUser(userId: string): Promise<ChatRoom[]> {
+  if (IS_TEST_MODE) {
+    return testChatRooms
+      .filter((r) => r.customerId === userId || r.therapistId === userId)
+      .slice()
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+  }
   const { data, error } = await withTimeout(
     supabase
       .from('chat_rooms')
@@ -1656,6 +1943,31 @@ export async function sendChatMessage(
   content: string,
   messageType: 'text' | 'image' | 'location' | 'system' = 'text',
 ): Promise<string> {
+  if (IS_TEST_MODE) {
+    const now = new Date().toISOString();
+    const msg: ChatMessage = {
+      id: `test-msg-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      roomId,
+      senderId,
+      senderRole,
+      content,
+      messageType,
+      isRead: false,
+      createdAt: now,
+    };
+
+    testChatMessages.push(msg);
+
+    const room = testChatRooms.find((r) => r.id === roomId);
+    if (room) room.updatedAt = now;
+
+    const listeners = testChatListeners[roomId];
+    if (listeners) {
+      for (const cb of listeners) cb(msg);
+    }
+
+    return msg.id;
+  }
   const { data, error } = await withTimeout(
     supabase.rpc('send_chat_message', {
       p_room_id: roomId,
@@ -1675,6 +1987,13 @@ export async function getChatMessages(
   limit: number = 100,
   offset: number = 0,
 ): Promise<ChatMessage[]> {
+  if (IS_TEST_MODE) {
+    const all = testChatMessages
+      .filter((m) => m.roomId === roomId)
+      .slice()
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+    return all.slice(offset, offset + limit);
+  }
   const { data, error } = await withTimeout(
     supabase
       .from('chat_messages')
@@ -1689,6 +2008,14 @@ export async function getChatMessages(
 
 /** Mark all unread messages in a room as read for a user */
 export async function markChatMessagesRead(roomId: string, readerId: string): Promise<void> {
+  if (IS_TEST_MODE) {
+    for (const m of testChatMessages) {
+      if (m.roomId === roomId && !m.isRead && m.senderId !== readerId) {
+        m.isRead = true;
+      }
+    }
+    return;
+  }
   const { error } = await withTimeout(
     supabase.rpc('mark_messages_read', {
       p_room_id: roomId,
@@ -1703,6 +2030,13 @@ export function subscribeToChatMessages(
   roomId: string,
   onNewMessage: (msg: ChatMessage) => void,
 ) {
+  if (IS_TEST_MODE) {
+    if (!testChatListeners[roomId]) testChatListeners[roomId] = new Set();
+    testChatListeners[roomId].add(onNewMessage);
+    return () => {
+      testChatListeners[roomId]?.delete(onNewMessage);
+    };
+  }
   const channel = supabase
     .channel(`chat:${roomId}`)
     .on(

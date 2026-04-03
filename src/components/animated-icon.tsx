@@ -1,3 +1,4 @@
+import { AppColors } from '@/constants/appColors';
 import { useEffect, useState } from 'react';
 import { Image, StyleSheet, Text, View } from 'react-native';
 import Animated, {
@@ -116,11 +117,11 @@ const splashStyles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: '#EF5350',
+    backgroundColor: AppColors.accent,
   },
   loadingText: {
     fontSize: 14,
-    color: '#EF5350',
+    color: AppColors.primaryDark,
     fontWeight: '500',
   },
 });
@@ -182,7 +183,7 @@ const styles = StyleSheet.create({
   },
   background: {
     borderRadius: 40,
-    backgroundColor: '#E53935',
+    backgroundColor: AppColors.primaryDark,
     width: 128,
     height: 128,
     position: 'absolute',

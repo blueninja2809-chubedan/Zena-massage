@@ -21,6 +21,7 @@ import {
     TouchableOpacity,
     View
 } from 'react-native';
+import { AppColors } from '@/constants/appColors';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 const translations = {
@@ -123,15 +124,15 @@ const translations = {
 };
 
 const COLORS = {
-  green: '#C62828',
-  greenLight: '#E8F5EE',
-  bg: '#F5F5F5',
-  white: '#fff',
-  text: '#1A1A1A',
-  subText: '#666',
-  border: '#E0E0E0',
+  green: AppColors.primaryDark,
+  greenLight: AppColors.successBg,
+  bg: AppColors.bg,
+  white: AppColors.white,
+  text: AppColors.text,
+  subText: AppColors.textMuted,
+  border: AppColors.border,
   gold: '#F5A623',
-  red: '#E53935',
+  red: AppColors.danger,
 };
 
 interface LocationService {

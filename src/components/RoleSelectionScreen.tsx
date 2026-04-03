@@ -9,19 +9,20 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useLanguage } from '@/contexts/LanguageContext';
+import { AppColors } from '@/constants/appColors';
 import type { UserRole } from '@/contexts/UserContext';
 
 const COLORS = {
-  primary: '#E53935',
-  primaryDark: '#C62828',
-  primarySoft: '#FFCDD2',
-  bg: '#FFFBFB',
-  card: '#FFFFFF',
-  text: '#1A2B2A',
-  muted: '#5E8A83',
-  border: '#D1D9E6',
-  green: '#C62828',
-  greenSoft: '#E8F5EE',
+  primary: AppColors.primaryDark,
+  primaryDark: AppColors.primaryDark,
+  primarySoft: AppColors.primarySoft,
+  bg: AppColors.bg,
+  card: AppColors.white,
+  text: AppColors.text,
+  muted: AppColors.textMuted,
+  border: AppColors.border,
+  green: AppColors.success,
+  greenSoft: AppColors.successBg,
 };
 
 interface RoleSelectionScreenProps {

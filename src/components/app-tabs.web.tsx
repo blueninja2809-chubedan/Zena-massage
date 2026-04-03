@@ -5,17 +5,18 @@ import { useColorScheme } from 'react-native';
 
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useUser } from '@/contexts/UserContext';
+import { AppColors } from '@/constants/appColors';
 
 const TAB_COLORS = {
   light: {
-    background: '#FFFBFB',
-    iconDefault: '#4B5563',
-    iconSelected: '#E53935',
+    background: AppColors.bg,
+    iconDefault: '#6B5F52',
+    iconSelected: AppColors.primaryDark,
   },
   dark: {
-    background: '#1A1212',
-    iconDefault: '#A18888',
-    iconSelected: '#FF8A80',
+    background: '#141210',
+    iconDefault: '#9A8F85',
+    iconSelected: AppColors.primary,
   },
 } as const;
 

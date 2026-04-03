@@ -12,6 +12,7 @@ import {
     TouchableOpacity,
     View,
 } from 'react-native';
+import { AppColors } from '@/constants/appColors';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 const translations = {
@@ -46,27 +47,27 @@ const translations = {
 };
 
 const COLORS = {
-  primary: '#E53935',
-  dark: '#C62828',
-  bg: '#FFFBFB',
-  white: '#fff',
-  text: '#1A1A1A',
-  subText: '#4B5563',
-  accent: '#E53935',
-  green: '#C62828',
-  greenLight: '#E8F5EE',
+  primary: AppColors.primaryDark,
+  dark: AppColors.primaryDark,
+  bg: AppColors.bg,
+  white: AppColors.white,
+  text: AppColors.text,
+  subText: AppColors.textMuted,
+  accent: AppColors.accent,
+  green: AppColors.success,
+  greenLight: AppColors.successBg,
   gold: '#F5A623',
   goldLight: '#FFF8E1',
   orange: '#E67E22',
   orangeLight: '#FDF2E9',
-  border: '#F0E4E6',
+  border: AppColors.border,
 };
 
 type PromoTag = { label: string; color: string; bg: string };
 
 function getPromoTag(promo: Promotion, strings: Record<string, string>): PromoTag | null {
   if (promo.discountPercent >= 50) return { label: strings.hotDeal, color: COLORS.orange, bg: COLORS.orangeLight };
-  if (promo.discountPercent >= 30) return { label: strings.limited, color: COLORS.primary, bg: '#FFCDD2' };
+  if (promo.discountPercent >= 30) return { label: strings.limited, color: COLORS.primary, bg: AppColors.primarySoft };
   if (promo.code.includes('NEW') || promo.code.includes('INVITE')) return { label: strings.newUser, color: COLORS.green, bg: COLORS.greenLight };
   return null;
 }
