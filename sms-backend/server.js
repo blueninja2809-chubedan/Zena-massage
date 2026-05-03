@@ -406,6 +406,10 @@ function requireApiKey(req, res, next) {
   next();
 }
 
+app.get('/', (_req, res) => {
+  res.redirect(302, '/health');
+});
+
 app.get('/health', (_req, res) => {
   res.json({
     success: true,
