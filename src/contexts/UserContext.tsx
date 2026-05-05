@@ -5,10 +5,13 @@ import {
 } from '@/lib/supabaseService';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { createContext, useContext, useEffect, useState } from 'react';
+import { StyleSheet, View } from 'react-native';
+
+import ZenaLoadingScreen from '@/components/animated-icon';
 
 const AUTH_UID_KEY = 'custom_auth_uid';
 
-export type UserRole = 'customer' | 'therapist';
+export type UserRole = 'customer' | 'therapist' | 'admin';
 
 export interface UserData {
   authUid?: string;
@@ -16,6 +19,8 @@ export interface UserData {
   phoneNumber?: string;
   createdAt: string;
   displayName?: string;
+  bio?: string;
+  age?: number;
   gender?: 'male' | 'female' | 'other';
   nationality?: string;
   password?: string;
@@ -34,9 +39,17 @@ export interface UserData {
   selectedCity?: string;
 }
 
+export type SetUserOptions = {
+  /**
+   * Khi true: không gọi `upsertUserProfile` (đã lưu ở bước trước, ví dụ sau đăng ký).
+   * Vẫn ghi cache + AUTH_UID.
+   */
+  skipRemotePersist?: boolean;
+};
+
 interface UserContextType {
   user: UserData | null;
-  setUser: (user: UserData | null) => void;
+  setUser: (user: UserData | null, options?: SetUserOptions) => Promise<void>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
   isLoading: boolean;
@@ -58,6 +71,13 @@ function toUserData(input: Record<string, unknown>): UserData | null {
 export function UserProvider({ children }: { children: React.ReactNode }) {
   const [user, setUserState] = useState<UserData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [userSplashDismissed, setUserSplashDismissed] = useState(false);
+
+  useEffect(() => {
+    if (isLoading) {
+      setUserSplashDismissed(false);
+    }
+  }, [isLoading]);
 
   // Hydrate user from AsyncStorage on app start.
   useEffect(() => {
@@ -90,9 +110,12 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
           const remoteUser = await getUserProfileByUid(uid);
           if (remoteUser) {
             const userData = toUserData(remoteUser);
-            setUserState(userData);
-            // Cache for next startup
-            await AsyncStorage.setItem('cached_user_profile', JSON.stringify(remoteUser)).catch(() => {});
+            if (userData) {
+              setUserState(userData);
+              await AsyncStorage.setItem('cached_user_profile', JSON.stringify(remoteUser)).catch(() => {});
+            } else {
+              console.warn('[UserContext] Remote profile could not be parsed; keeping cached user if any.');
+            }
           } else {
             setUserState(null);
             await AsyncStorage.removeItem(AUTH_UID_KEY);
@@ -113,16 +136,18 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   // Save profile in Supabase and persist UID locally.
-  const setUser = async (newUser: UserData | null) => {
+  const setUser = async (newUser: UserData | null, options?: SetUserOptions) => {
     try {
       if (newUser) {
         // Cache profile locally for fast startup next time
         await AsyncStorage.setItem('cached_user_profile', JSON.stringify(newUser)).catch(() => {});
-        try {
-          await upsertUserProfile(newUser as unknown as Record<string, unknown>);
-        } catch (upsertErr: unknown) {
-          const e = upsertErr as { message?: string; code?: string };
-          console.warn('[setUser] upsertUserProfile failed (non-fatal):', e?.message, e?.code);
+        if (!options?.skipRemotePersist) {
+          try {
+            await upsertUserProfile(newUser as unknown as Record<string, unknown>);
+          } catch (upsertErr: unknown) {
+            const e = upsertErr as { message?: string; code?: string };
+            console.warn('[setUser] upsertUserProfile failed (non-fatal):', e?.message, e?.code);
+          }
         }
         if (newUser.authUid) {
           await AsyncStorage.setItem(AUTH_UID_KEY, newUser.authUid);
@@ -144,8 +169,11 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     const uid = user?.authUid || (await AsyncStorage.getItem(AUTH_UID_KEY));
     if (!uid) return;
     const remoteUser = await getUserProfileByUid(uid);
-    if (remoteUser) {
-      setUserState(toUserData(remoteUser));
+    if (!remoteUser) return;
+    const parsed = toUserData(remoteUser);
+    if (parsed) {
+      setUserState(parsed);
+      await AsyncStorage.setItem('cached_user_profile', JSON.stringify(remoteUser)).catch(() => {});
     }
   };
 
@@ -160,9 +188,25 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
   return (
     <UserContext.Provider value={{ user, setUser, logout, refreshUser, isLoading }}>
       {children}
+      {isLoading || !userSplashDismissed ? (
+        <View style={bootOverlay.wrap} pointerEvents="auto">
+          <ZenaLoadingScreen
+            readyToDismiss={!isLoading}
+            onDismissed={() => setUserSplashDismissed(true)}
+          />
+        </View>
+      ) : null}
     </UserContext.Provider>
   );
 }
+
+const bootOverlay = StyleSheet.create({
+  wrap: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 100000,
+    elevation: 100000,
+  },
+});
 
 export function useUser() {
   const context = useContext(UserContext);

@@ -1,10 +1,15 @@
-import { useBookings, type SharedBooking } from '@/contexts/BookingsContext';
+import { AppColors } from '@/constants/appColors';
+import BookingConfirmScreen from '@/components/BookingConfirmScreen';
+import { useBookings, type CustomerCartSnapshotRow, type SharedBooking } from '@/contexts/BookingsContext';
+import type { CancelledBookingRecord } from '@/lib/supabaseService';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useUser } from '@/contexts/UserContext';
 import { useTabletLayout } from '@/hooks/use-tablet-layout';
+import { replayServicesFromBooking } from '@/lib/bookingReplay';
 import type { Therapist } from '@/lib/types';
+import Feather from '@expo/vector-icons/Feather';
 import { useRouter } from 'expo-router';
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
     Alert,
     FlatList,
@@ -17,12 +22,11 @@ import {
     TouchableOpacity,
     View,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { AppColors } from '@/constants/appColors';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import BookingDetailModal from './BookingDetailModal';
 import ChatScreen from './ChatScreen';
+import { ModalSafeAreaProvider } from './ModalSafeAreaProvider';
 import ReviewModal from './ReviewModal';
-import TherapistDetailScreen from './TherapistDetailScreen';
 
 const COLORS = {
   primary: AppColors.primaryDark,
@@ -36,138 +40,214 @@ const COLORS = {
 
 const translations = {
   vi: {
-    activity: 'Lịch sử hoạt động',
-    myBookings: 'Đặt lịch của tôi',
+    myBookings: 'Lịch sử đặt lịch',
     noLogin: 'Vui lòng đăng nhập',
     noLoginDesc: 'Bạn cần đăng nhập để xem lịch sử đặt lịch',
     signIn: 'Đăng nhập',
-    noBookings: 'Chưa có đặt lịch nào',
-    noBookingsDesc: 'Hãy khám phá và đặt lịch massage ngay',
+    noBookingsCompleted: 'Chưa có đơn hoàn thành',
+    noBookingsCompletedDesc: 'Các đơn massage đã hoàn tất sẽ xuất hiện tại đây.',
+    noBookingsCancelled: 'Chưa có đơn đã huỷ',
+    noBookingsCancelledDesc: 'Các đơn đã huỷ trước đây sẽ xuất hiện tại đây.',
     explore: 'Khám phá dịch vụ',
-    all: 'Tất cả',
-    upcoming: 'Sắp tới',
-    completed: 'Hoàn thành',
-    cancelled: 'Đã hủy',
-    pending: 'Chờ xác nhận',
-    confirmed: 'Đã xác nhận',
-    date: 'Ngày:',
-    time: 'Giờ:',
-    therapist: 'Kỹ thuật viên:',
-    service: 'Dịch vụ:',
-    price: 'Giá:',
-    loading: 'Đang tải...',
-    cancel: 'Hủy đặt lịch',
+    completed: 'Đã hoàn thành',
+    cancelled: 'Đã huỷ',
     reschedule: 'Đặt lại',
     review: 'Đánh giá',
+    previousPage: 'Trang trước',
+    nextPage: 'Trang sau',
+    pageLabel: 'Trang',
+    latestLimitHint: 'Hiển thị 50 đơn gần nhất',
   },
   en: {
-    activity: 'Activity History',
-    myBookings: 'My Bookings',
-    noLogin: 'Please Sign In',
+    myBookings: 'Booking history',
+    noLogin: 'Please sign in',
     noLoginDesc: 'Sign in to view your booking history',
-    signIn: 'Sign In',
-    noBookings: 'No bookings yet',
-    noBookingsDesc: 'Explore and book a massage service now',
-    explore: 'Explore Services',
-    all: 'All',
-    upcoming: 'Upcoming',
+    signIn: 'Sign in',
+    noBookingsCompleted: 'No completed bookings',
+    noBookingsCompletedDesc: 'Completed massage bookings will appear here.',
+    noBookingsCancelled: 'No cancelled bookings',
+    noBookingsCancelledDesc: 'Previously cancelled bookings will appear here.',
+    explore: 'Explore services',
     completed: 'Completed',
     cancelled: 'Cancelled',
-    pending: 'Pending',
-    confirmed: 'Confirmed',
-    date: 'Date:',
-    time: 'Time:',
-    therapist: 'Therapist:',
-    service: 'Service:',
-    price: 'Price:',
-    loading: 'Loading...',
-    cancel: 'Cancel Booking',
-    reschedule: 'Reschedule',
+    reschedule: 'Rebook',
     review: 'Review',
+    previousPage: 'Previous',
+    nextPage: 'Next',
+    pageLabel: 'Page',
+    latestLimitHint: 'Showing latest 50 bookings',
   },
 };
 
+type ActivityFilter = 'completed' | 'cancelled';
+const ACTIVITY_PAGE_SIZE = 10;
+const ACTIVITY_MAX_RECENT = 50;
+
 const getStatusColor = (status: string) => {
   switch (status) {
-    case 'confirmed':
-      return AppColors.primaryDark;
-    case 'pending':
-      return '#C77800';
     case 'completed':
-      return AppColors.textMuted;
+      return AppColors.success;
     case 'cancelled':
       return AppColors.danger;
     default:
-      return COLORS.primary;
+      return AppColors.textMuted;
   }
 };
 
 const getStatusBgColor = (status: string) => {
   switch (status) {
-    case 'confirmed':
-      return AppColors.accentSoft;
-    case 'pending':
-      return '#FFF3E0';
     case 'completed':
-      return AppColors.primarySoft2;
+      return AppColors.successBg;
     case 'cancelled':
       return AppColors.dangerBg;
     default:
-      return COLORS.light;
+      return AppColors.primarySoft2;
   }
 };
 
+/**
+ * Chuyển 1 record từ bảng `cancelled_bookings` (Supabase) → SharedBooking để render
+ * cùng UI với card đã hoàn thành. Mỗi record được gắn `status: 'cancelled'`.
+ */
+function cancelledRecordToSharedBooking(rec: CancelledBookingRecord): SharedBooking {
+  const payload = rec.payload || {};
+  const cartRaw = (payload as Record<string, unknown>).customerCartSnapshot;
+  let cart: CustomerCartSnapshotRow[] | undefined;
+  if (Array.isArray(cartRaw)) {
+    const out: CustomerCartSnapshotRow[] = [];
+    for (const row of cartRaw) {
+      if (!row || typeof row !== 'object') continue;
+      const o = row as Record<string, unknown>;
+      const name = typeof o.name === 'string' ? o.name.trim() : '';
+      const duration = Number(o.duration);
+      const price = Number(o.price);
+      if (!name || !Number.isFinite(duration) || !Number.isFinite(price)) continue;
+      out.push({ name, duration, price });
+    }
+    if (out.length) cart = out;
+  }
+  return {
+    id: rec.bookingId || `cancelled-${rec.id}`,
+    customerUserId: rec.customerUserId,
+    customerName: rec.customerName || '',
+    customerPhone: rec.customerPhone || '',
+    therapistId: rec.therapistId || '',
+    therapistName: rec.therapistName || '',
+    therapistAvatar: rec.therapistAvatar,
+    service: rec.service || '',
+    date: rec.date || rec.cancelledAt.slice(0, 10),
+    time: rec.time || '',
+    address: rec.address || '',
+    price: rec.price || 0,
+    status: 'cancelled',
+    createdAt: rec.cancelledAt,
+    customerCartSnapshot: cart,
+    paymentMethod: rec.paymentMethod,
+  };
+}
+
 export default function ActivityScreen() {
   const router = useRouter();
-  const insets = useSafeAreaInsets();
   const { user } = useUser();
   const { language } = useLanguage();
-  const { bookings, updateStatus, hasReviewed } = useBookings();
+  const {
+    bookings,
+    cancelledBookings,
+    hasReviewed,
+    refreshCancelledBookings,
+  } = useBookings();
   const tabletLayout = useTabletLayout();
   const strings = translations[language as keyof typeof translations] || translations.vi;
-  const isTestMode =
-    process.env.EXPO_PUBLIC_TEST_MODE === 'true' ||
-    process.env.EXPO_PUBLIC_TEST_MODE === '1' ||
-    // eslint-disable-next-line no-undef
-    (typeof __DEV__ !== 'undefined' && __DEV__);
 
-  const allBookings = useMemo(
-    () => {
-      if (!user) return [];
+  /**
+   * Tab "Đã hoàn thành" — đọc từ bookings (table `bookings`).
+   * Chỉ giữ booking thuộc về user hiện tại (theo authUid/phone/email/displayName).
+   */
+  const completedBookings = useMemo(() => {
+    if (!user) return [] as SharedBooking[];
+    const authUid = user.authUid || '';
+    const phone = user.phoneNumber || '';
+    const email = user.email || '';
+    const displayName = user.displayName || '';
 
-      const authUid = user.authUid || '';
-      const phone = user.phoneNumber || '';
-      const email = user.email || '';
-      const displayName = user.displayName || '';
+    return bookings.filter((b) => {
+      if (b.status !== 'completed') return false;
+      const bookingUserId = (b as SharedBooking & { customerUserId?: string }).customerUserId || '';
+      return (
+        (!!authUid && bookingUserId === authUid) ||
+        (!!phone && b.customerPhone === phone) ||
+        (!!email && b.customerPhone === email) ||
+        (!!displayName && b.customerName === displayName)
+      );
+    });
+  }, [bookings, user]);
 
-      const matched = bookings.filter((b) => {
-        const bookingUserId = (b as SharedBooking & { customerUserId?: string }).customerUserId || '';
-        return (
-          (!!authUid && bookingUserId === authUid) ||
-          (!!phone && b.customerPhone === phone) ||
-          (!!email && b.customerPhone === email) ||
-          (!!displayName && b.customerName === displayName)
-        );
-      });
-
-      // For local test flow, always show orders even if profile identifiers differ.
-      return matched.length > 0 ? matched : (isTestMode ? bookings : matched);
-    },
-    [bookings, isTestMode, user],
+  /**
+   * Tab "Đã huỷ" — đọc từ bảng riêng `cancelled_bookings` qua RPC. Mỗi lần focus
+   * Activity hoặc đổi tab sẽ chủ động refresh để khách thấy ngay đơn vừa huỷ.
+   */
+  const cancelledMapped = useMemo(
+    () => cancelledBookings.map(cancelledRecordToSharedBooking),
+    [cancelledBookings],
   );
 
-  const [selectedStatus, setSelectedStatus] = useState<string | null>(null);
+  const [selectedStatus, setSelectedStatus] = useState<ActivityFilter>('completed');
+  const [currentPage, setCurrentPage] = useState(1);
   const [selectedBooking, setSelectedBooking] = useState<SharedBooking | null>(null);
   const [detailVisible, setDetailVisible] = useState(false);
-  const [rebookTherapist, setRebookTherapist] = useState<Therapist | null>(null);
+  const [rebookTarget, setRebookTarget] = useState<{ therapist: Therapist; booking: SharedBooking } | null>(null);
   const [reviewBooking, setReviewBooking] = useState<SharedBooking | null>(null);
   const [reviewVisible, setReviewVisible] = useState(false);
   const [chatBookingId, setChatBookingId] = useState<string | null>(null);
 
-  const filteredBookings = useMemo(() => {
-    if (!selectedStatus) return allBookings;
-    return allBookings.filter((b) => b.status === selectedStatus);
-  }, [allBookings, selectedStatus]);
+  const sortByCreatedDesc = (a: SharedBooking, b: SharedBooking) => {
+    const ka = a.createdAt || `${a.date} ${a.time}`;
+    const kb = b.createdAt || `${b.date} ${b.time}`;
+    if (ka === kb) return 0;
+    return ka < kb ? 1 : -1;
+  };
+
+  // Tách 2 nguồn — lấy tối đa 50 đơn gần nhất CHO MỖI tab (Đã hoàn thành / Đã huỷ).
+  const recentCompleted = useMemo(
+    () => [...completedBookings].sort(sortByCreatedDesc).slice(0, ACTIVITY_MAX_RECENT),
+    [completedBookings],
+  );
+  const recentCancelled = useMemo(
+    () => [...cancelledMapped].sort(sortByCreatedDesc).slice(0, ACTIVITY_MAX_RECENT),
+    [cancelledMapped],
+  );
+
+  const counts = useMemo(
+    () => ({ completed: recentCompleted.length, cancelled: recentCancelled.length }),
+    [recentCompleted, recentCancelled],
+  );
+
+  const filteredBookings = useMemo(
+    () => (selectedStatus === 'completed' ? recentCompleted : recentCancelled),
+    [recentCompleted, recentCancelled, selectedStatus],
+  );
+  const totalPages = Math.max(1, Math.ceil(filteredBookings.length / ACTIVITY_PAGE_SIZE));
+  const page = Math.min(currentPage, totalPages);
+  const pagedBookings = useMemo(() => {
+    const start = (page - 1) * ACTIVITY_PAGE_SIZE;
+    return filteredBookings.slice(start, start + ACTIVITY_PAGE_SIZE);
+  }, [filteredBookings, page]);
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
+
+  // Mỗi lần mở Activity hoặc đổi sang tab "Đã huỷ" → kéo dữ liệu mới nhất từ
+  // bảng `cancelled_bookings` (RPC). Polling nền vẫn chạy mỗi 15s ở context.
+  useEffect(() => {
+    void refreshCancelledBookings();
+  }, [refreshCancelledBookings, selectedStatus]);
+
+  const rebookSelectedServices = useMemo(() => {
+    if (!rebookTarget) return [];
+    return replayServicesFromBooking(rebookTarget.booking, rebookTarget.therapist);
+  }, [rebookTarget]);
 
   const handleBookingPress = (booking: SharedBooking) => {
     setSelectedBooking(booking);
@@ -180,7 +260,7 @@ export default function ActivityScreen() {
       const therapist = await getTherapistById(booking.therapistId);
       if (therapist) {
         setDetailVisible(false);
-        setRebookTherapist(therapist);
+        setRebookTarget({ therapist, booking });
       } else {
         Alert.alert('Lỗi', 'Không tìm thấy kỹ thuật viên này');
       }
@@ -189,161 +269,205 @@ export default function ActivityScreen() {
     }
   };
 
-  const renderBookingCard = ({ item }: { item: SharedBooking }) => (
-    <TouchableOpacity style={styles.bookingCard} activeOpacity={0.8} onPress={() => handleBookingPress(item)}>
-      <View style={styles.bookingHeader}>
-        <View style={styles.bookingInfo}>
-          <Text style={styles.bookingService}>{item.service}</Text>
-          <View style={styles.therapistRow}>
-            {item.therapistAvatar ? (
-              <Image source={{ uri: item.therapistAvatar }} style={styles.therapistAvatarImg} />
-            ) : (
-              <View style={styles.therapistAvatarFallback}>
-                <Text style={styles.therapistAvatarFallbackText}>
-                  {item.therapistName?.charAt(0) || '?'}
-                </Text>
-              </View>
-            )}
-            <Text style={styles.bookingTherapist}>{item.therapistName}</Text>
+  const renderBookingCard = ({ item }: { item: SharedBooking }) => {
+    const showReview =
+      item.status === 'completed' && !item.reviewed && !hasReviewed(item.id);
+    return (
+      <TouchableOpacity style={styles.bookingCard} activeOpacity={0.85} onPress={() => handleBookingPress(item)}>
+        {/* Hàng 1: tên dịch vụ — pill trạng thái (luôn cùng baseline). */}
+        <View style={styles.cardTopRow}>
+          <Text style={styles.bookingService} numberOfLines={2}>
+            {item.service}
+          </Text>
+          <View style={[styles.statusBadge, { backgroundColor: getStatusBgColor(item.status) }]}>
+            <Text style={[styles.statusText, { color: getStatusColor(item.status) }]} numberOfLines={1}>
+              {strings[item.status as keyof typeof strings] || item.status}
+            </Text>
           </View>
         </View>
-        <View
-          style={[styles.statusBadge, { backgroundColor: getStatusBgColor(item.status) }]}
-        >
-          <Text style={[styles.statusText, { color: getStatusColor(item.status) }]}>
-            {strings[item.status as keyof typeof strings] || item.status}
+
+        {/* Hàng 2: avatar + tên KTV. */}
+        <View style={styles.therapistRow}>
+          {item.therapistAvatar ? (
+            <Image source={{ uri: item.therapistAvatar }} style={styles.therapistAvatarImg} />
+          ) : (
+            <View style={styles.therapistAvatarFallback}>
+              <Text style={styles.therapistAvatarFallbackText}>
+                {item.therapistName?.charAt(0) || '?'}
+              </Text>
+            </View>
+          )}
+          <Text style={styles.bookingTherapist} numberOfLines={1}>
+            {item.therapistName}
           </Text>
         </View>
-      </View>
 
-      <Text style={styles.bookingDate}>
-        📅 {item.date} • 🕐 {item.time}
-      </Text>
+        {/* Hàng 3: ngày + giờ. */}
+        <View style={styles.metaRow}>
+          <View style={styles.metaItem}>
+            <Feather name="calendar" size={14} color={COLORS.lightText} />
+            <Text style={styles.metaText}>{item.date}</Text>
+          </View>
+          <Text style={styles.metaDot}>•</Text>
+          <View style={styles.metaItem}>
+            <Feather name="clock" size={14} color={COLORS.lightText} />
+            <Text style={styles.metaText}>{item.time}</Text>
+          </View>
+        </View>
 
-      <View style={styles.bookingFooter}>
-        <Text style={styles.bookingPrice}>₫ {item.price?.toLocaleString()}</Text>
-        <View style={styles.actionButtons}>
-          {item.status === 'confirmed' && (
-            <TouchableOpacity
-              style={[styles.actionBtn, styles.cancelBtn]}
-              onPress={() => updateStatus(item.id, 'cancelled')}
-            >
-              <Text style={[styles.actionBtnText, styles.cancelBtnText]}>
-                {strings.cancel}
-              </Text>
-            </TouchableOpacity>
-          )}
-          {(item.status === 'cancelled' || item.status === 'completed') && (
-            <TouchableOpacity
-              style={styles.actionBtn}
-              onPress={() => handleRebook(item)}
-            >
+        {/* Hàng 4: giá + actions (đặt lại / đánh giá). */}
+        <View style={styles.bookingFooter}>
+          <Text style={styles.bookingPrice}>{(item.price ?? 0).toLocaleString('vi-VN')} ₫</Text>
+          <View style={styles.actionButtons}>
+            {showReview ? (
+              <TouchableOpacity
+                style={[styles.actionBtn, styles.reviewBtn]}
+                onPress={() => {
+                  setReviewBooking(item);
+                  setReviewVisible(true);
+                }}
+              >
+                <Text style={[styles.actionBtnText, styles.reviewBtnText]}>{strings.review}</Text>
+              </TouchableOpacity>
+            ) : null}
+            <TouchableOpacity style={styles.actionBtn} onPress={() => handleRebook(item)}>
               <Text style={styles.actionBtnText}>{strings.reschedule}</Text>
             </TouchableOpacity>
-          )}
-          {item.status === 'completed' && !item.reviewed && !hasReviewed(item.id) && (
-            <TouchableOpacity
-              style={[styles.actionBtn, styles.reviewBtn]}
-              onPress={() => { setReviewBooking(item); setReviewVisible(true); }}
-            >
-              <Text style={[styles.actionBtnText, styles.reviewBtnText]}>{strings.review}</Text>
-            </TouchableOpacity>
-          )}
+          </View>
         </View>
-      </View>
-    </TouchableOpacity>
-  );
+      </TouchableOpacity>
+    );
+  };
 
   const renderStatusFilter = () => {
-    const statuses = ['all', 'confirmed', 'pending', 'completed', 'cancelled'];
+    const items: { key: ActivityFilter; label: string; count: number }[] = [
+      { key: 'completed', label: strings.completed, count: counts.completed },
+      { key: 'cancelled', label: strings.cancelled, count: counts.cancelled },
+    ];
     return (
-      <View style={styles.filterWrapper}>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={[styles.filterContainer, { paddingHorizontal: tabletLayout.horizontalPadding }]}
-        >
-          {statuses.map((item) => {
-            const isActive = selectedStatus === item || (selectedStatus === null && item === 'all');
-            return (
-              <TouchableOpacity
-                key={item}
-                style={[styles.filterBtn, isActive && styles.filterBtnActive]}
-                onPress={() => setSelectedStatus(item === 'all' ? null : item)}
-                activeOpacity={0.7}
-              >
-                <Text style={[styles.filterBtnText, isActive && styles.filterBtnTextActive]}>
-                  {strings[item as keyof typeof strings] || item}
+      <View style={[styles.filterWrapper, { paddingHorizontal: tabletLayout.horizontalPadding }]}>
+        {items.map((it) => {
+          const isActive = selectedStatus === it.key;
+          return (
+            <TouchableOpacity
+              key={it.key}
+              style={[styles.filterBtn, isActive && styles.filterBtnActive]}
+              onPress={() => {
+                setSelectedStatus(it.key);
+                setCurrentPage(1);
+              }}
+              activeOpacity={0.85}
+            >
+              <Text style={[styles.filterBtnText, isActive && styles.filterBtnTextActive]} numberOfLines={1}>
+                {it.label}
+              </Text>
+              <View style={[styles.filterBadge, isActive && styles.filterBadgeActive]}>
+                <Text style={[styles.filterBadgeText, isActive && styles.filterBadgeTextActive]}>
+                  {it.count}
                 </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
+              </View>
+            </TouchableOpacity>
+          );
+        })}
       </View>
     );
   };
 
-  // Loading
+  // Chưa đăng nhập
   if (!user) {
     return (
-      <View style={[styles.container, { paddingTop: insets.top }]}>
+      <SafeAreaView style={styles.container} edges={['top', 'left', 'right', 'bottom']}>
         <StatusBar barStyle="dark-content" backgroundColor={COLORS.bg} />
         <View style={[styles.pageContent, tabletLayout.contentContainer]}>
-        <View style={styles.emptyContainer}>
-          <Text style={styles.emptyIcon}>🔐</Text>
-          <Text style={styles.emptyTitle}>{strings.noLogin}</Text>
-          <TouchableOpacity style={styles.primaryBtn} onPress={() => router.push('/account')}>
-            <Text style={styles.primaryBtnText}>{strings.signIn}</Text>
-          </TouchableOpacity>
+          <View style={styles.emptyContainer}>
+            <View style={styles.emptyIllustration}>
+              <Feather name="lock" size={36} color={COLORS.primary} />
+            </View>
+            <Text style={styles.emptyTitle}>{strings.noLogin}</Text>
+            <Text style={styles.emptyDesc}>{strings.noLoginDesc}</Text>
+            <TouchableOpacity style={styles.primaryBtn} onPress={() => router.push('/account')}>
+              <Text style={styles.primaryBtnText}>{strings.signIn}</Text>
+            </TouchableOpacity>
+          </View>
         </View>
-        </View>
-      </View>
+      </SafeAreaView>
     );
   }
 
-  // No bookings
-  if (allBookings.length === 0) {
-    return (
-      <View style={[styles.container, { paddingTop: insets.top }]}>
-        <StatusBar barStyle="dark-content" backgroundColor={COLORS.bg} />
-        <View style={[styles.pageContent, tabletLayout.contentContainer]}>
+  const isEmptyForTab = filteredBookings.length === 0;
+  const emptyTitle =
+    selectedStatus === 'completed' ? strings.noBookingsCompleted : strings.noBookingsCancelled;
+  const emptyDesc =
+    selectedStatus === 'completed' ? strings.noBookingsCompletedDesc : strings.noBookingsCancelledDesc;
+
+  return (
+    <SafeAreaView style={styles.container} edges={['top', 'left', 'right', 'bottom']}>
+      <StatusBar barStyle="dark-content" backgroundColor={COLORS.bg} />
+      <View style={[styles.pageContent, tabletLayout.contentContainer]}>
         <View style={[styles.header, { paddingHorizontal: tabletLayout.horizontalPadding }]}>
           <Text style={styles.headerTitle}>{strings.myBookings}</Text>
         </View>
-        <View style={styles.emptyContainer}>
-          <Text style={styles.emptyIcon}>📭</Text>
-          <Text style={styles.emptyTitle}>{strings.noBookings}</Text>
-          <Text style={styles.emptyDesc}>{strings.noBookingsDesc}</Text>
-          <TouchableOpacity
-            style={styles.primaryBtn}
-            onPress={() => router.push('/(tabs)/index')}
+
+        {renderStatusFilter()}
+
+        {isEmptyForTab ? (
+          <ScrollView
+            contentContainerStyle={[
+              styles.emptyContainer,
+              { paddingHorizontal: tabletLayout.horizontalPadding },
+            ]}
+            showsVerticalScrollIndicator={false}
           >
-            <Text style={styles.primaryBtnText}>{strings.explore}</Text>
-          </TouchableOpacity>
-        </View>
-        </View>
-      </View>
-    );
-  }
-
-  // Has bookings
-  return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
-      <StatusBar barStyle="dark-content" backgroundColor={COLORS.bg} />
-      <View style={[styles.pageContent, tabletLayout.contentContainer]}>
-      <View style={[styles.header, { paddingHorizontal: tabletLayout.horizontalPadding }]}>
-        <Text style={styles.headerTitle}>{strings.myBookings}</Text>
-      </View>
-
-      {renderStatusFilter()}
-
-      <FlatList
-        data={filteredBookings}
-        renderItem={renderBookingCard}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={[styles.listContainer, { paddingHorizontal: tabletLayout.horizontalPadding }]}
-        showsVerticalScrollIndicator={false}
-      />
+            <View style={styles.emptyIllustration}>
+              <Feather
+                name={selectedStatus === 'completed' ? 'check-circle' : 'x-circle'}
+                size={40}
+                color={selectedStatus === 'completed' ? AppColors.success : AppColors.danger}
+              />
+            </View>
+            <Text style={styles.emptyTitle}>{emptyTitle}</Text>
+            <Text style={styles.emptyDesc}>{emptyDesc}</Text>
+            <TouchableOpacity style={styles.primaryBtn} onPress={() => router.push('/')}>
+              <Text style={styles.primaryBtnText}>{strings.explore}</Text>
+            </TouchableOpacity>
+          </ScrollView>
+        ) : (
+          <View style={styles.listWrap}>
+            <FlatList
+              data={pagedBookings}
+              renderItem={renderBookingCard}
+              keyExtractor={(item) => item.id}
+              contentContainerStyle={[styles.listContainer, { paddingHorizontal: tabletLayout.horizontalPadding }]}
+              showsVerticalScrollIndicator={false}
+            />
+            <View style={[styles.pagingBar, { paddingHorizontal: tabletLayout.horizontalPadding }]}>
+              <TouchableOpacity
+                style={[styles.pageBtn, page <= 1 && styles.pageBtnDisabled]}
+                onPress={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={page <= 1}
+                activeOpacity={0.85}
+              >
+                <Text style={[styles.pageBtnText, page <= 1 && styles.pageBtnTextDisabled]}>
+                  {strings.previousPage}
+                </Text>
+              </TouchableOpacity>
+              <Text style={styles.pageText}>
+                {strings.pageLabel} {page}/{totalPages}
+              </Text>
+              <TouchableOpacity
+                style={[styles.pageBtn, page >= totalPages && styles.pageBtnDisabled]}
+                onPress={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                disabled={page >= totalPages}
+                activeOpacity={0.85}
+              >
+                <Text style={[styles.pageBtnText, page >= totalPages && styles.pageBtnTextDisabled]}>
+                  {strings.nextPage}
+                </Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.latestHint}>{strings.latestLimitHint}</Text>
+          </View>
+        )}
       </View>
 
       <BookingDetailModal
@@ -358,21 +482,34 @@ export default function ActivityScreen() {
       />
 
       <Modal visible={chatBookingId !== null} animationType="slide" onRequestClose={() => setChatBookingId(null)}>
-        {chatBookingId && (
-          <ChatScreen
-            onClose={() => setChatBookingId(null)}
-            bookingId={chatBookingId}
-          />
-        )}
+        <ModalSafeAreaProvider>
+          {chatBookingId && (
+            <ChatScreen
+              onClose={() => setChatBookingId(null)}
+              bookingId={chatBookingId}
+            />
+          )}
+        </ModalSafeAreaProvider>
       </Modal>
 
-      <Modal visible={rebookTherapist !== null} animationType="slide">
-        {rebookTherapist && (
-          <TherapistDetailScreen
-            therapist={rebookTherapist}
-            onClose={() => setRebookTherapist(null)}
-          />
-        )}
+      <Modal
+        visible={rebookTarget !== null}
+        animationType="slide"
+        presentationStyle="fullScreen"
+        hardwareAccelerated
+        onRequestClose={() => setRebookTarget(null)}
+      >
+        {rebookTarget ? (
+          <View style={{ flex: 1, backgroundColor: AppColors.bg }}>
+            <BookingConfirmScreen
+              therapist={rebookTarget.therapist}
+              selectedServices={rebookSelectedServices}
+              totalPrice={rebookSelectedServices.reduce((acc, s) => acc + s.price, 0)}
+              reopenBookingSnapshot={rebookTarget.booking}
+              onClose={() => setRebookTarget(null)}
+            />
+          </View>
+        ) : null}
       </Modal>
 
       <ReviewModal
@@ -380,7 +517,7 @@ export default function ActivityScreen() {
         booking={reviewBooking}
         onClose={() => setReviewVisible(false)}
       />
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -389,188 +526,266 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: COLORS.bg,
   },
-  centerContent: {
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
   pageContent: {
     flex: 1,
     width: '100%',
   },
   header: {
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    paddingBottom: 12,
+    paddingHorizontal: 20,
+    paddingTop: 4,
+    paddingBottom: 14,
   },
   headerTitle: {
-    fontSize: 28,
+    fontSize: 26,
     fontWeight: '800',
     color: COLORS.text,
+    letterSpacing: -0.3,
   },
   filterWrapper: {
-    marginBottom: 8,
-  },
-  filterContainer: {
-    paddingHorizontal: 16,
-    gap: 8,
     flexDirection: 'row',
-    alignItems: 'center',
+    gap: 10,
+    marginBottom: 14,
+    paddingHorizontal: 20,
   },
   filterBtn: {
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-    borderRadius: 20,
-    borderWidth: 1.2,
-    borderColor: COLORS.light,
-    backgroundColor: '#fff',
-    height: 34,
+    flex: 1,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: COLORS.light,
+    backgroundColor: AppColors.white,
   },
   filterBtnActive: {
     backgroundColor: COLORS.primary,
     borderColor: COLORS.primary,
   },
   filterBtnText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: COLORS.lightText,
-  },
-  filterBtnTextActive: {
-    color: '#fff',
-  },
-  listContainer: {
-    paddingHorizontal: 16,
-    paddingBottom: 20,
-    gap: 12,
-  },
-  bookingCard: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: COLORS.light,
-    marginBottom: 8,
-  },
-  bookingHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 10,
-  },
-  bookingInfo: {
-    flex: 1,
-  },
-  bookingService: {
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '700',
     color: COLORS.text,
-    marginBottom: 2,
   },
-  bookingTherapist: {
+  filterBtnTextActive: {
+    color: AppColors.white,
+  },
+  filterBadge: {
+    minWidth: 24,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 12,
+    backgroundColor: AppColors.primarySoft2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  filterBadgeActive: {
+    backgroundColor: 'rgba(255,255,255,0.22)',
+  },
+  filterBadgeText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: COLORS.primary,
+  },
+  filterBadgeTextActive: {
+    color: AppColors.white,
+  },
+  listContainer: {
+    paddingHorizontal: 20,
+    paddingTop: 4,
+    paddingBottom: 24,
+    gap: 12,
+  },
+  listWrap: {
+    flex: 1,
+  },
+  pagingBar: {
+    marginTop: 2,
+    marginBottom: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  pageBtn: {
+    backgroundColor: AppColors.white,
+    borderWidth: 1,
+    borderColor: AppColors.border,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  pageBtnDisabled: {
+    backgroundColor: AppColors.primarySoft2,
+  },
+  pageBtnText: {
+    color: COLORS.text,
+    fontWeight: '700',
     fontSize: 12,
+  },
+  pageBtnTextDisabled: {
     color: COLORS.lightText,
+  },
+  pageText: {
+    fontSize: 12.5,
+    fontWeight: '700',
+    color: COLORS.text,
+  },
+  latestHint: {
+    textAlign: 'center',
+    color: COLORS.lightText,
+    fontSize: 11.5,
+    marginBottom: 10,
+  },
+  bookingCard: {
+    backgroundColor: AppColors.white,
+    borderRadius: 18,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: COLORS.light,
+    shadowColor: AppColors.primaryDark,
+    shadowOpacity: 0.04,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 1,
+  },
+  cardTopRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 10,
+    marginBottom: 12,
+  },
+  bookingService: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: '800',
+    color: COLORS.text,
+    lineHeight: 21,
+  },
+  statusBadge: {
+    flexShrink: 0,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 10,
+  },
+  statusText: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.2,
   },
   therapistRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 4,
-    gap: 8,
+    gap: 10,
+    marginBottom: 10,
   },
   therapistAvatarImg: {
-    width: 36,
-    height: 36,
-    borderRadius: 8,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     backgroundColor: COLORS.light,
   },
   therapistAvatarFallback: {
-    width: 36,
-    height: 36,
-    borderRadius: 8,
-    backgroundColor: COLORS.light,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: AppColors.primarySoft,
     alignItems: 'center',
     justifyContent: 'center',
   },
   therapistAvatarFallbackText: {
-    fontSize: 14,
-    fontWeight: '700',
+    fontSize: 13,
+    fontWeight: '800',
     color: COLORS.primary,
   },
-  statusBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-    marginLeft: 8,
-  },
-  statusText: {
-    fontSize: 11,
-    fontWeight: '700',
-    textTransform: 'capitalize',
-  },
-  bookingDate: {
-    fontSize: 12,
+  bookingTherapist: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '600',
     color: COLORS.text,
-    fontWeight: '500',
-    marginBottom: 6,
   },
-  bookingClient: {
+  metaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 12,
+    flexWrap: 'wrap',
+  },
+  metaItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  metaText: {
+    fontSize: 12.5,
+    color: COLORS.lightText,
+    fontWeight: '600',
+  },
+  metaDot: {
     fontSize: 12,
     color: COLORS.lightText,
-    marginBottom: 10,
+    opacity: 0.7,
   },
   bookingFooter: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingTop: 10,
-    borderTopWidth: 1,
+    paddingTop: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: COLORS.light,
   },
   bookingPrice: {
-    fontSize: 15,
-    fontWeight: '700',
+    fontSize: 16,
+    fontWeight: '800',
     color: COLORS.primary,
   },
   actionButtons: {
     flexDirection: 'row',
-    gap: 6,
+    gap: 8,
   },
   actionBtn: {
     backgroundColor: COLORS.primary,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 10,
   },
   actionBtnText: {
-    color: '#fff',
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  cancelBtn: {
-    backgroundColor: AppColors.primarySoft,
-  },
-  cancelBtnText: {
-    color: AppColors.danger,
+    color: AppColors.white,
+    fontSize: 12,
+    fontWeight: '700',
   },
   reviewBtn: {
-    backgroundColor: '#E8F5E9',
+    backgroundColor: AppColors.successBg,
+    borderWidth: 1,
+    borderColor: AppColors.success,
   },
   reviewBtnText: {
-    color: '#2E7D32',
+    color: AppColors.success,
   },
   emptyContainer: {
-    flex: 1,
+    flexGrow: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    paddingVertical: 48,
     paddingHorizontal: 20,
   },
-  emptyIcon: {
-    fontSize: 60,
-    marginBottom: 16,
+  emptyIllustration: {
+    width: 92,
+    height: 92,
+    borderRadius: 46,
+    backgroundColor: AppColors.primarySoft2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 18,
+    borderWidth: 1,
+    borderColor: AppColors.primarySoft,
   },
   emptyTitle: {
     fontSize: 18,
-    fontWeight: '700',
+    fontWeight: '800',
     color: COLORS.text,
     marginBottom: 8,
     textAlign: 'center',
@@ -579,23 +794,19 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: COLORS.lightText,
     textAlign: 'center',
-    marginBottom: 20,
-    lineHeight: 20,
+    marginBottom: 22,
+    lineHeight: 21,
+    maxWidth: 320,
   },
   primaryBtn: {
     backgroundColor: COLORS.primary,
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    borderRadius: 10,
+    paddingHorizontal: 28,
+    paddingVertical: 13,
+    borderRadius: 14,
   },
   primaryBtnText: {
-    color: '#fff',
+    color: AppColors.white,
     fontSize: 14,
-    fontWeight: '700',
-  },
-  loadingText: {
-    marginTop: 12,
-    fontSize: 14,
-    color: COLORS.lightText,
+    fontWeight: '800',
   },
 });

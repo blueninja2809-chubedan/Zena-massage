@@ -1,3 +1,17 @@
+import {
+  checkTherapistMinBalance,
+  getSharedBookingRecordById,
+  markNotificationAsRead,
+  therapistApplyToBroadcastBooking,
+  therapistPrimaryAcceptBooking,
+  therapistPrimaryDeclineBooking,
+  therapistSkipBroadcastBooking,
+} from '@/lib/supabaseService';
+import {
+  sendPushNotification,
+  sendPushToUser,
+  sendPushToUsers,
+} from '@/lib/pushNotifications';
 import { supabase } from '@/lib/supabase';
 import React, {
     createContext,
@@ -7,7 +21,22 @@ import React, {
     useRef,
     useState,
 } from 'react';
-import { Animated, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Alert,
+  Animated,
+  AppState,
+  Modal,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useBookings } from './BookingsContext';
+import { useLanguage } from './LanguageContext';
 import { useUser } from './UserContext';
 
 // Conditionally import native-only modules
@@ -16,9 +45,11 @@ let Device: typeof import('expo-device') | null = null;
 let Constants: typeof import('expo-constants').default | null = null;
 
 if (Platform.OS !== 'web') {
+  /* eslint-disable @typescript-eslint/no-require-imports -- native-only optional deps */
   Notifications = require('expo-notifications');
   Device = require('expo-device');
   Constants = require('expo-constants').default;
+  /* eslint-enable @typescript-eslint/no-require-imports */
 
   // ─── Configure notification behavior (native only) ──────────────────
   Notifications!.setNotificationHandler({
@@ -53,6 +84,139 @@ const NotificationContext = createContext<NotificationContextType>({
   refreshUnreadCount: () => {},
 });
 
+type IncomingNotificationRow = {
+  id: string;
+  user_id: string;
+  is_read: boolean;
+  payload?: {
+    title?: string;
+    message?: string;
+    type?: string;
+    relatedId?: string;
+  } | null;
+};
+
+type JobOfferState = {
+  bookingId: string;
+  title: string;
+  body: string;
+  notificationId?: string;
+};
+
+// ─── Therapist job offer (đơn mới — ứng tuyển / không ứng tuyển) ─────
+function TherapistJobOfferModal({
+  visible,
+  offer,
+  language,
+  busy,
+  onDismiss,
+  onApply,
+  onDecline,
+}: {
+  visible: boolean;
+  offer: JobOfferState | null;
+  language: 'vi' | 'en';
+  busy: boolean;
+  onDismiss: () => void;
+  onApply: () => void;
+  onDecline: () => void;
+}) {
+  const insets = useSafeAreaInsets();
+  const isEn = language === 'en';
+  if (!offer) {
+    return null;
+  }
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onDismiss}>
+      <View style={jobModalStyles.backdrop}>
+        <View style={[jobModalStyles.card, { marginTop: Math.max(insets.top, 12) + 24 }]}>
+          <Text style={jobModalStyles.kicker}>{isEn ? 'New booking' : 'Đơn mới'}</Text>
+          <Text style={jobModalStyles.title} numberOfLines={3}>
+            {offer.title}
+          </Text>
+          <ScrollView style={jobModalStyles.scroll} showsVerticalScrollIndicator={false}>
+            <Text style={jobModalStyles.body}>{offer.body}</Text>
+          </ScrollView>
+          <View style={jobModalStyles.row}>
+            <TouchableOpacity
+              style={[jobModalStyles.btn, jobModalStyles.btnGhost]}
+              onPress={onDecline}
+              disabled={busy}
+              activeOpacity={0.85}
+            >
+              <Text style={jobModalStyles.btnGhostText}>{isEn ? 'Not applying' : 'Không ứng tuyển'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[jobModalStyles.btn, jobModalStyles.btnPrimary]}
+              onPress={onApply}
+              disabled={busy}
+              activeOpacity={0.85}
+            >
+              {busy ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={jobModalStyles.btnPrimaryText}>{isEn ? 'Apply' : 'Ứng tuyển'}</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+          <TouchableOpacity style={jobModalStyles.closeHint} onPress={onDismiss} disabled={busy}>
+            <Text style={jobModalStyles.closeHintText}>{isEn ? 'Close' : 'Đóng'}</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+const jobModalStyles = StyleSheet.create({
+  backdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'flex-start',
+    paddingHorizontal: 20,
+  },
+  card: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.2,
+    shadowRadius: 16,
+    elevation: 12,
+    maxHeight: '82%',
+  },
+  kicker: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#6B8C5B',
+    textTransform: 'uppercase',
+    marginBottom: 8,
+  },
+  title: { fontSize: 18, fontWeight: '700', color: '#171717', marginBottom: 10 },
+  scroll: { maxHeight: 220, marginBottom: 16 },
+  body: { fontSize: 14, color: '#60666D', lineHeight: 20 },
+  row: { flexDirection: 'row', gap: 10 },
+  btn: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 48,
+  },
+  btnGhost: {
+    backgroundColor: '#F1F3F0',
+    borderWidth: 1,
+    borderColor: '#D9DED6',
+  },
+  btnGhostText: { fontSize: 15, fontWeight: '700', color: '#3D4A38' },
+  btnPrimary: { backgroundColor: '#5F8F47' },
+  btnPrimaryText: { fontSize: 15, fontWeight: '700', color: '#FFFFFF' },
+  closeHint: { marginTop: 12, alignItems: 'center', paddingVertical: 6 },
+  closeHintText: { fontSize: 14, color: '#9AA0A6', fontWeight: '600' },
+});
+
 // ─── Helper: register for push notifications (native only) ───────────
 async function registerForPushNotificationsAsync(): Promise<string | null> {
   if (Platform.OS === 'web' || !Notifications || !Device || !Constants) {
@@ -64,15 +228,19 @@ async function registerForPushNotificationsAsync(): Promise<string | null> {
     return null;
   }
 
-  // Android requires a notification channel
+  // Android requires notification channels (IDs must match Expo push payload channelId).
   if (Platform.OS === 'android') {
-    await Notifications.setNotificationChannelAsync('default', {
-      name: 'Mặc định',
-      importance: Notifications.AndroidImportance.MAX,
-      vibrationPattern: [0, 250, 250, 250],
-      lightColor: '#5F8F47',
-      sound: 'default',
-    });
+    const channel = (id: string, name: string) =>
+      Notifications.setNotificationChannelAsync(id, {
+        name,
+        importance: Notifications.AndroidImportance.MAX,
+        vibrationPattern: [0, 250, 250, 250],
+        lightColor: '#5F8F47',
+        sound: 'default',
+      });
+    await channel('default', 'Mặc định');
+    await channel('booking', 'Đặt lịch & việc mới');
+    await channel('promotion', 'Ưu đãi & thông báo');
   }
 
   const { status: existingStatus } = await Notifications.getPermissionsAsync();
@@ -112,92 +280,7 @@ async function savePushTokenToProfile(uid: string, token: string) {
   }
 }
 
-// ─── Helper: send push via Expo Push API ──────────────────────────────
-export async function sendPushNotification(
-  expoPushToken: string,
-  title: string,
-  body: string,
-  data?: Record<string, unknown>,
-) {
-  await fetch('https://exp.host/--/api/v2/push/send', {
-    method: 'POST',
-    headers: {
-      Accept: 'application/json',
-      'Accept-encoding': 'gzip, deflate',
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      to: expoPushToken,
-      sound: 'default',
-      title,
-      body,
-      data: data ?? {},
-    }),
-  });
-}
-
-// ─── Helper: send push to a user by their user_id ────────────────────
-export async function sendPushToUser(
-  userId: string,
-  title: string,
-  body: string,
-  data?: Record<string, unknown>,
-) {
-  // Look up the push token from profiles
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('push_token')
-    .eq('id', userId)
-    .maybeSingle();
-
-  if (profile?.push_token) {
-    await sendPushNotification(profile.push_token, title, body, data);
-  }
-}
-
-// ─── Helper: send push to multiple users by IDs ──────────────────────
-export async function sendPushToUsers(
-  userIds: string[],
-  title: string,
-  body: string,
-  data?: Record<string, unknown>,
-) {
-  if (userIds.length === 0) return;
-  const { data: profiles } = await supabase
-    .from('profiles')
-    .select('push_token')
-    .in('id', userIds)
-    .not('push_token', 'is', null);
-
-  if (!profiles || profiles.length === 0) return;
-
-  const tokens = profiles
-    .map((p) => p.push_token)
-    .filter((t): t is string => !!t);
-
-  // Expo accepts batch push (up to 100 per request)
-  const messages = tokens.map((token) => ({
-    to: token,
-    sound: 'default' as const,
-    title,
-    body,
-    data: data ?? {},
-  }));
-
-  // Send in chunks of 100
-  for (let i = 0; i < messages.length; i += 100) {
-    const chunk = messages.slice(i, i + 100);
-    await fetch('https://exp.host/--/api/v2/push/send', {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Accept-encoding': 'gzip, deflate',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(chunk),
-    });
-  }
-}
+export { sendPushNotification, sendPushToUser, sendPushToUsers };
 
 // ─── In-App Notification Banner ──────────────────────────────────────
 function InAppBannerView({
@@ -207,6 +290,7 @@ function InAppBannerView({
   banner: InAppBanner;
   onDismiss: () => void;
 }) {
+  const insets = useSafeAreaInsets();
   const translateY = useRef(new Animated.Value(-100)).current;
 
   useEffect(() => {
@@ -230,7 +314,10 @@ function InAppBannerView({
 
   return (
     <Animated.View
-      style={[bannerStyles.container, { transform: [{ translateY }] }]}
+      style={[
+        bannerStyles.container,
+        { paddingTop: Math.max(insets.top, 8) + 4, transform: [{ translateY }] },
+      ]}
     >
       <TouchableOpacity
         style={bannerStyles.content}
@@ -258,7 +345,6 @@ const bannerStyles = StyleSheet.create({
     left: 0,
     right: 0,
     zIndex: 9999,
-    paddingTop: Platform.OS === 'ios' ? 50 : 30,
     paddingHorizontal: 12,
   },
   content: {
@@ -303,12 +389,18 @@ export function NotificationProvider({
   children: React.ReactNode;
 }) {
   const { user } = useUser();
+  const { language } = useLanguage();
+  const langUi = language === 'en' ? 'en' : 'vi';
+  const { refreshBookings, updateStatus } = useBookings();
   const [expoPushToken, setExpoPushToken] = useState<string | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
   const [banner, setBanner] = useState<InAppBanner | null>(null);
+  const [jobOffer, setJobOffer] = useState<JobOfferState | null>(null);
+  const [jobOfferBusy, setJobOfferBusy] = useState(false);
 
   const notificationListener = useRef<{ remove: () => void } | null>(null);
   const responseListener = useRef<{ remove: () => void } | null>(null);
+  const seenNotificationIds = useRef<Set<string>>(new Set());
 
   // Fetch unread count from Supabase (user_id column expects auth UUID — skip bad ids to avoid query errors)
   const refreshUnreadCount = useCallback(async () => {
@@ -316,6 +408,9 @@ export function NotificationProvider({
     const userId = typeof raw === 'string' ? raw.trim() : '';
     if (!userId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(userId)) {
       setUnreadCount(0);
+      if (Platform.OS === 'ios' && Notifications) {
+        void Notifications.setBadgeCountAsync(0);
+      }
       return;
     }
     const { count, error } = await supabase
@@ -328,7 +423,116 @@ export function NotificationProvider({
     }
     if (count != null) {
       setUnreadCount(count);
+      if (Platform.OS === 'ios' && Notifications) {
+        void Notifications.setBadgeCountAsync(count);
+      }
     }
+  }, [user?.authUid]);
+
+  const dismissJobOffer = useCallback(() => {
+    setJobOffer(null);
+  }, []);
+
+  const finalizeJobOffer = useCallback(
+    async (notificationId?: string) => {
+      if (notificationId) {
+        await markNotificationAsRead(notificationId).catch(() => {});
+      }
+      await refreshBookings();
+      await refreshUnreadCount();
+      setJobOffer(null);
+    },
+    [refreshBookings, refreshUnreadCount],
+  );
+
+  const handleJobApply = useCallback(async () => {
+    if (!jobOffer || !user?.authUid) return;
+    setJobOfferBusy(true);
+    try {
+      const okWallet = await checkTherapistMinBalance(user.authUid, 0);
+      if (!okWallet) {
+        Alert.alert(
+          langUi === 'en' ? 'Cannot accept job' : 'Chưa thể nhận đơn',
+          langUi === 'en'
+            ? 'Check connection fee and minimum balance. Use Top up.'
+            : 'Kiểm tra phí kết nối và số dư tối thiểu. Vào Nạp tiền.',
+        );
+        return;
+      }
+      const row = await getSharedBookingRecordById(jobOffer.bookingId);
+      if (!row) {
+        Alert.alert(
+          langUi === 'en' ? 'Error' : 'Lỗi',
+          langUi === 'en' ? 'Booking not found.' : 'Không tìm thấy đơn.',
+        );
+        return;
+      }
+      const status = String(row.status ?? '');
+      if (status === 'cancelled') {
+        Alert.alert(
+          langUi === 'en' ? 'Closed' : 'Đã đóng',
+          langUi === 'en' ? 'This booking is no longer available.' : 'Đơn này không còn hiệu lực.',
+        );
+        return;
+      }
+      const flow = String(row.assignmentFlow ?? '');
+      const requested = String(row.requestedTherapistId ?? row.therapistId ?? '');
+      const uid = user.authUid;
+      if (flow === 'nominated_city_broadcast' && requested === uid) {
+        const r = await therapistPrimaryAcceptBooking(jobOffer.bookingId, uid);
+        if (!r.ok) {
+          Alert.alert(
+            langUi === 'en' ? 'Action failed' : 'Thao tác không thành công',
+            r.reason ?? '',
+          );
+          return;
+        }
+      } else if (flow === 'nominated_city_broadcast') {
+        const r = await therapistApplyToBroadcastBooking(
+          jobOffer.bookingId,
+          uid,
+          user?.displayName || user?.phoneNumber || 'KTV',
+          user?.avatarUri,
+        );
+        if (!r.ok) {
+          Alert.alert(
+            langUi === 'en' ? 'Action failed' : 'Thao tác không thành công',
+            r.reason ?? '',
+          );
+          return;
+        }
+      } else {
+        updateStatus(jobOffer.bookingId, 'confirmed');
+      }
+      await finalizeJobOffer(jobOffer.notificationId);
+    } finally {
+      setJobOfferBusy(false);
+    }
+  }, [jobOffer, user, langUi, updateStatus, finalizeJobOffer]);
+
+  const handleJobDecline = useCallback(async () => {
+    if (!jobOffer || !user?.authUid) return;
+    setJobOfferBusy(true);
+    try {
+      const row = await getSharedBookingRecordById(jobOffer.bookingId);
+      if (row) {
+        const flow = String(row.assignmentFlow ?? '');
+        const requested = String(row.requestedTherapistId ?? row.therapistId ?? '');
+        const uid = user.authUid;
+        if (flow === 'nominated_city_broadcast' && requested === uid) {
+          await therapistPrimaryDeclineBooking(jobOffer.bookingId, uid);
+        } else if (flow === 'nominated_city_broadcast') {
+          await therapistSkipBroadcastBooking(jobOffer.bookingId, uid);
+        }
+      }
+      await finalizeJobOffer(jobOffer.notificationId);
+    } finally {
+      setJobOfferBusy(false);
+    }
+  }, [jobOffer, user, finalizeJobOffer]);
+
+  useEffect(() => {
+    setJobOffer(null);
   }, [user?.authUid]);
 
   // Register push token when user logs in
@@ -353,22 +557,34 @@ export function NotificationProvider({
     notificationListener.current =
       Notifications.addNotificationReceivedListener((notification) => {
         const { title, body } = notification.request.content;
-        // Show in-app banner
+        const data = notification.request.content.data as Record<string, unknown> | undefined;
+        const relatedId = typeof data?.relatedId === 'string' ? data.relatedId.trim() : '';
+        const isJobPayload = data?.type === 'job' && relatedId.length > 0;
+
+        if (user?.role === 'therapist' && isJobPayload) {
+          setJobOffer({
+            bookingId: relatedId,
+            title: title ?? '',
+            body: body ?? '',
+          });
+          void refreshUnreadCount();
+          return;
+        }
+
         if (title || body) {
           setBanner({
             title: title ?? '',
             body: body ?? '',
           });
         }
-        // Bump unread count
-        refreshUnreadCount();
+        void refreshUnreadCount();
       });
 
     // Listen for user tapping on notification
     responseListener.current =
       Notifications.addNotificationResponseReceivedListener((_response) => {
         // You can navigate to specific screens based on notification data here
-        refreshUnreadCount();
+        void refreshUnreadCount();
       });
 
     return () => {
@@ -379,11 +595,88 @@ export function NotificationProvider({
         responseListener.current.remove();
       }
     };
-  }, [refreshUnreadCount]);
+  }, [refreshUnreadCount, user?.role]);
 
   // Initial unread count load
   useEffect(() => {
     refreshUnreadCount();
+  }, [refreshUnreadCount]);
+
+  // Realtime: when a notification row is inserted for this user, show banner + sound immediately.
+  useEffect(() => {
+    const uid = user?.authUid?.trim();
+    if (!uid) return;
+
+    const channel = supabase
+      .channel(`notifications:${uid}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'notifications',
+          filter: `user_id=eq.${uid}`,
+        },
+        (payload) => {
+          const row = payload.new as IncomingNotificationRow;
+          if (!row?.id || seenNotificationIds.current.has(row.id)) return;
+          seenNotificationIds.current.add(row.id);
+
+          const title = row.payload?.title ?? 'Thông báo mới';
+          const body = row.payload?.message ?? '';
+          const relatedId =
+            typeof row.payload?.relatedId === 'string' ? row.payload.relatedId.trim() : '';
+          const isTherapistJob =
+            user?.role === 'therapist' &&
+            row.payload?.type === 'job' &&
+            relatedId.length > 0;
+
+          void refreshUnreadCount();
+
+          if (isTherapistJob) {
+            setJobOffer({
+              bookingId: relatedId,
+              title,
+              body,
+              notificationId: row.id,
+            });
+            return;
+          }
+
+          setBanner({ title, body, type: row.payload?.type });
+
+          if (
+            Platform.OS !== 'web' &&
+            Notifications &&
+            (row.payload?.type === 'job' || row.payload?.type === 'booking')
+          ) {
+            void Notifications.scheduleNotificationAsync({
+              content: {
+                title,
+                body,
+                sound: 'default',
+                data: { type: row.payload?.type ?? 'booking', relatedId: row.payload?.relatedId },
+              },
+              trigger: null,
+            }).catch(() => {});
+          }
+        },
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [refreshUnreadCount, user?.authUid, user?.role]);
+
+  // Khi mở lại app (từ nền / sau khi xem thông báo hệ thống), cập nhật badge chuông trên màn hình chính
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        refreshUnreadCount();
+      }
+    });
+    return () => sub.remove();
   }, [refreshUnreadCount]);
 
   return (
@@ -391,12 +684,21 @@ export function NotificationProvider({
       value={{ expoPushToken, unreadCount, refreshUnreadCount }}
     >
       {children}
-      {banner && (
+      {banner && !jobOffer ? (
         <InAppBannerView
           banner={banner}
           onDismiss={() => setBanner(null)}
         />
-      )}
+      ) : null}
+      <TherapistJobOfferModal
+        visible={!!jobOffer && user?.role === 'therapist'}
+        offer={jobOffer}
+        language={langUi}
+        busy={jobOfferBusy}
+        onDismiss={dismissJobOffer}
+        onApply={() => void handleJobApply()}
+        onDecline={() => void handleJobDecline()}
+      />
     </NotificationContext.Provider>
   );
 }

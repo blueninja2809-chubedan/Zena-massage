@@ -1,34 +1,39 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import bcrypt from 'bcryptjs';
-import { supabase } from './supabase';
-import { MOCK_THERAPISTS } from './sampleData';
+import { debugLog } from '@/lib/debugLog';
+import * as FileSystem from 'expo-file-system/legacy';
+import { mapGlowPaymentMethodIdToZenaUnknown } from '@/lib/paymentMethodId';
+import { sendPushToUser } from '@/lib/pushNotifications';
+import {
+  findVirtualTherapistById,
+  getVirtualTherapistShifts,
+  isVirtualTherapistId,
+  mergeVirtualTherapists,
+} from './virtualTherapistsMock';
+import { getExpoAdminDisplayName, getExpoAdminUserId } from '@/constants/adminSupport';
+import { normalizeVietnamPhone } from '@/lib/phoneNormalize';
+import { isSupabaseConfigured, supabase } from './supabase';
 import type {
-    Booking,
-    Notification,
-    Promotion,
-    Review,
-    SavedAddress,
-    Service,
-    Therapist,
+  Booking,
+  Notification,
+  Promotion,
+  Review,
+  SavedAddress,
+  Service,
+  Therapist,
 } from './types';
-
-// In Expo RN, EXPO_PUBLIC_* vars are inlined at build time.
-// To make local testing reliable, also enable test mode automatically in dev builds.
-const IS_TEST_MODE =
-  process.env.EXPO_PUBLIC_TEST_MODE === 'true' ||
-  process.env.EXPO_PUBLIC_TEST_MODE === '1' ||
-  // eslint-disable-next-line no-undef
-  (typeof __DEV__ !== 'undefined' && __DEV__);
 
 export type PartnerApplicationStatus = 'pending' | 'approved' | 'rejected';
 
 export interface PartnerApplicationPayload {
+  userId?: string;
   applicationType: 'individual' | 'business';
   phoneNumber: string;
   displayName?: string;
+  shortDescription?: string;
   gender?: 'male' | 'female' | 'other';
   workingCity?: string;
   services?: string[];
+  /** In-app: local `file://` URIs; after submit, DB stores public HTTPS URLs here for admin. */
   imageUris: string[];
   businessName?: string;
   businessAddress?: string;
@@ -53,6 +58,15 @@ export interface PartnerApplicationRecord extends PartnerApplicationPayload {
 
 type JsonObject = Record<string, unknown>;
 
+function normalizeVietnameseText(value: string, maxChars: number): string {
+  const normalized = value.normalize('NFC');
+  const chars = Array.from(normalized);
+  if (chars.length <= maxChars) {
+    return normalized;
+  }
+  return chars.slice(0, maxChars).join('');
+}
+
 function withTimeout<T>(promiseLike: PromiseLike<T>, ms = 10000): Promise<T> {
   return Promise.race([
     Promise.resolve(promiseLike),
@@ -60,7 +74,7 @@ function withTimeout<T>(promiseLike: PromiseLike<T>, ms = 10000): Promise<T> {
   ]);
 }
 
-/** Longer timeout for auth RPCs (bcrypt is CPU-intensive on free tier) */
+/** Longer timeout for auth RPCs on free-tier database */
 function withAuthTimeout<T>(promiseLike: PromiseLike<T>): Promise<T> {
   return withTimeout(promiseLike, 30000);
 }
@@ -104,72 +118,6 @@ const FALLBACK_SERVICES: Service[] = [
   },
 ];
 
-const FALLBACK_THERAPISTS: Therapist[] = [
-  {
-    id: 'fallback-therapist-huong',
-    name: 'Nguyen Thi Huong',
-    phoneNumber: '0912345678',
-    email: 'huong@gmail.com',
-    gender: 'female',
-    avatar: '',
-    photos: [],
-    bio: 'Ky thuat vien co kinh nghiem massage thu gian va spa.',
-    bioEn: 'Experienced therapist in relaxation massage and spa.',
-    specialties: ['massage', 'spa'],
-    experience: 5,
-    rating: 4.8,
-    reviewCount: 150,
-    hourlyRate: 250000,
-    distanceFromCenter: 2.1,
-    workingCity: 'TP Ho Chi Minh',
-    isAvailable: true,
-    availability: {},
-    languages: ['Vietnamese', 'English'],
-    certifications: [],
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: 'fallback-therapist-an',
-    name: 'Tran Van An',
-    phoneNumber: '0987654321',
-    email: 'an@gmail.com',
-    gender: 'male',
-    avatar: '',
-    photos: [],
-    bio: 'Chuyen massage tri lieu va phuc hoi.',
-    bioEn: 'Specialized in therapeutic and recovery massage.',
-    specialties: ['massage', 'yoga'],
-    experience: 3,
-    rating: 4.6,
-    reviewCount: 90,
-    hourlyRate: 200000,
-    distanceFromCenter: 4.3,
-    workingCity: 'TP Ho Chi Minh',
-    isAvailable: true,
-    availability: {},
-    languages: ['Vietnamese'],
-    certifications: [],
-    createdAt: new Date().toISOString(),
-  },
-];
-
-const FALLBACK_PROMOTIONS: Promotion[] = [
-  {
-    id: 'fallback-promo-welcome50',
-    code: 'WELCOME50',
-    description: 'Discount cho khach hang moi',
-    discountPercent: 50,
-    maxDiscountAmount: 150000,
-    minOrderAmount: 0,
-    expiryDate: '2027-12-31T23:59:59.000Z',
-    maxUses: 100,
-    currentUses: 0,
-    conditions: [],
-    isActive: true,
-    createdAt: new Date().toISOString(),
-  },
-];
-
 let hasWarnedCatalogPermission = false;
 
 function isCatalogPermissionDenied(error: unknown): boolean {
@@ -193,18 +141,52 @@ function warnCatalogPermissionOnce(error: unknown): void {
 }
 
 function normalizePhone(phoneNumber: string): string {
-  return phoneNumber.replace(/\s/g, '');
+  return normalizeVietnamPhone(phoneNumber);
 }
 
-function toE164(rawPhone: string): string {
-  const digits = rawPhone.replace(/[^\d+]/g, '');
-  if (digits.startsWith('+')) {
-    return digits;
+/**
+ * Bóc tên cột khi PostgREST / Postgres báo thiếu cột (schema chưa migrate hết).
+ * Dùng cả `message` và `details` vì supabase-js đôi khi để lỗi dài ở `details`.
+ */
+function extractMissingColumnFromSupabaseError(error: unknown): string | null {
+  if (error == null) {
+    return null;
   }
-  if (digits.startsWith('0')) {
-    return `+84${digits.slice(1)}`;
+  const e = error as { message?: string; details?: string; hint?: string; code?: string };
+  const blob = [e.message, e.details, e.hint].filter(Boolean).join('\n');
+  if (!blob.trim()) {
+    return null;
   }
-  return `+${digits}`;
+  const patterns: RegExp[] = [
+    /column\s+["']([a-zA-Z0-9_]+)["']\s+of\s+relation/i,
+    /Could not find the ['"]([a-zA-Z0-9_]+)['"] column/i,
+    /\bCould not find the '([a-zA-Z0-9_]+)' column\b/i,
+    /Could not find the '([a-zA-Z0-9_]+)' column of '[^']+' in the schema cache/i,
+  ];
+  for (const re of patterns) {
+    const m = blob.match(re);
+    if (m?.[1]) {
+      return m[1];
+    }
+  }
+  const simple = blob.match(/["']([a-zA-Z0-9_]+)["']\s+does not exist/i);
+  return simple?.[1] ?? null;
+}
+
+function formatSupabaseError(err: unknown): string {
+  if (err == null) return 'unknown error';
+  if (typeof err !== 'object') return String(err);
+  const e = err as { message?: string; details?: string; hint?: string; code?: string };
+  return [e.code, e.message, e.details, e.hint].filter((x) => x != null && String(x).trim()).join(' | ');
+}
+
+/** RPC upsert_profile ép uuid/timestamptz — chuỗi '' là invalid so với IS NOT NULL trong SQL. */
+function sanitizeProfilePayloadForRpc(row: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(row)) {
+    out[k] = v === '' ? null : v;
+  }
+  return out;
 }
 
 function toIso(value: unknown, fallback = new Date().toISOString()): string {
@@ -234,15 +216,239 @@ function mapService(row: JsonObject): Service {
   };
 }
 
+function firstNonEmptyString(values: unknown[]): string {
+  const found = values.find((value) => typeof value === 'string' && value.trim().length > 0);
+  return typeof found === 'string' ? found : '';
+}
+
+/**
+ * Postgres text[] literal when exposed as a single string (some drivers / logs / RPC),
+ * e.g. `{https://example.com/a.png,"https://b/c,d.png"}` — not valid JSON.
+ */
+function parsePostgresTextArrayLiteral(input: string): string[] {
+  const s = input.trim();
+  if (!s.startsWith('{') || !s.endsWith('}')) return [];
+  const inner = s.slice(1, -1).trim();
+  if (!inner) return [];
+
+  const out: string[] = [];
+  let i = 0;
+  while (i < inner.length) {
+    const ch = inner[i];
+    if (ch === '"') {
+      i++;
+      let buf = '';
+      while (i < inner.length) {
+        if (inner[i] === '\\' && i + 1 < inner.length) {
+          buf += inner[i + 1];
+          i += 2;
+          continue;
+        }
+        if (inner[i] === '"') {
+          i++;
+          break;
+        }
+        buf += inner[i];
+        i++;
+      }
+      if (buf) out.push(buf.trim());
+      while (i < inner.length && inner[i] === ',') i++;
+      continue;
+    }
+
+    let start = i;
+    while (i < inner.length && inner[i] !== ',') i++;
+    const chunk = inner.slice(start, i).trim();
+    if (chunk && chunk.toUpperCase() !== 'NULL') out.push(chunk);
+    if (inner[i] === ',') i++;
+  }
+  return out;
+}
+
+/** Parse photo arrays from DB (text[], jsonb, or JSON string). */
+function coerceImageUrlList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    const out: string[] = [];
+    for (const item of value) {
+      if (typeof item === 'string' && item.trim()) {
+        out.push(item.trim());
+      } else if (item && typeof item === 'object' && 'url' in item && typeof (item as { url?: unknown }).url === 'string') {
+        const u = (item as { url: string }).url.trim();
+        if (u) out.push(u);
+      }
+    }
+    return out;
+  }
+  if (typeof value === 'string') {
+    const t = value.trim();
+    if (!t) return [];
+    if (t.startsWith('{') && t.endsWith('}')) {
+      return parsePostgresTextArrayLiteral(t);
+    }
+    if (t.startsWith('[')) {
+      try {
+        return coerceImageUrlList(JSON.parse(t));
+      } catch {
+        return [t];
+      }
+    }
+    return [t];
+  }
+  return [];
+}
+
+function partnerPayloadImageUris(payload: unknown): string[] {
+  if (!payload || typeof payload !== 'object') return [];
+  const p = payload as Record<string, unknown>;
+  const chunks: string[][] = [
+    coerceImageUrlList(p.imageUris ?? p.image_uris),
+    coerceImageUrlList(p.images),
+    coerceImageUrlList(p.gallery),
+    coerceImageUrlList(p.photos),
+  ];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const list of chunks) {
+    for (const raw of list) {
+      const t = typeof raw === 'string' ? raw.trim() : '';
+      if (!t || seen.has(t)) continue;
+      seen.add(t);
+      out.push(t);
+    }
+  }
+  return out;
+}
+
+const SUPABASE_PUBLIC_ORIGIN = (process.env.EXPO_PUBLIC_SUPABASE_URL ?? '').replace(/\/$/, '');
+
+/** Public buckets whose objects may be stored as paths like `bucket/key` in DB. */
+const STORAGE_PUBLIC_BUCKET_PREFIXES = ['partner-applications/'];
+
+/**
+ * Chuẩn hoá URL ảnh (một số API chỉ trả path `/storage/...` hoặc bucket-relative).
+ */
+export function normalizeTherapistMediaUrl(raw: string): string {
+  const s = raw.trim();
+  if (!s) return '';
+  if (/^https?:\/\//i.test(s)) return s;
+  if (s.startsWith('//')) return `https:${s}`;
+  if (!SUPABASE_PUBLIC_ORIGIN) return s;
+  if (s.startsWith('/storage/') || s.startsWith('/storage/v1/')) {
+    return `${SUPABASE_PUBLIC_ORIGIN}${s}`;
+  }
+  const noLeading = s.replace(/^\//, '');
+  for (const prefix of STORAGE_PUBLIC_BUCKET_PREFIXES) {
+    if (noLeading.startsWith(prefix)) {
+      return `${SUPABASE_PUBLIC_ORIGIN}/storage/v1/object/public/${noLeading}`;
+    }
+  }
+  return s;
+}
+
+/** True if RN Image can load this string as a remote/local resource (not emoji / junk). */
+export function isRenderableTherapistImageUri(url: string): boolean {
+  const n = normalizeTherapistMediaUrl(url);
+  if (!n) return false;
+  const lower = n.toLowerCase();
+  if (lower.startsWith('http://') || lower.startsWith('https://')) return true;
+  if (lower.startsWith('file://')) return true;
+  if (lower.startsWith('content://')) return true;
+  if (lower.startsWith('ph://') || lower.startsWith('assets-library://')) return true;
+  if (lower.includes('/storage/v1/object/public/')) return true;
+  if (lower.startsWith('blob:')) return true;
+  return false;
+}
+
+/**
+ * Các URI hiển thị được (đã normalize, dedupe): avatar trước, sau đó album partner (`photos`).
+ * Dùng cho list/card: khi URI đầu lỗi tải có thể thử phần tử tiếp theo.
+ */
+export function therapistDisplayImageCandidates(t: Pick<Therapist, 'avatar' | 'photos'>): string[] {
+  const tryOne = (raw: string) => {
+    const n = normalizeTherapistMediaUrl(raw);
+    return n && isRenderableTherapistImageUri(n) ? n : '';
+  };
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const push = (raw: string) => {
+    const u = tryOne(raw);
+    if (!u || seen.has(u)) return;
+    seen.add(u);
+    out.push(u);
+  };
+  if (typeof t.avatar === 'string') push(t.avatar);
+  for (const p of t.photos ?? []) {
+    if (typeof p === 'string') push(p);
+  }
+  return out;
+}
+
+/**
+ * URI hiển thị trên UI — luôn normalize + fallback ảnh đầu trong album.
+ */
+export function resolveTherapistImageUriForUi(t: Pick<Therapist, 'avatar' | 'photos'>): string {
+  const c = therapistDisplayImageCandidates(t);
+  return c[0] ?? '';
+}
+
+/**
+ * KTV chưa set avatar hợp lệ → dùng ảnh đầu trong album (photos / ảnh dịch vụ).
+ */
+export function coalesceTherapistAvatarFromAlbum(t: Therapist): Therapist {
+  const normPhotos = (t.photos ?? [])
+    .map((u) => (typeof u === 'string' ? normalizeTherapistMediaUrl(u.trim()) : ''))
+    .filter(Boolean);
+  const avatarTrim = typeof t.avatar === 'string' ? normalizeTherapistMediaUrl(t.avatar.trim()) : '';
+  if (avatarTrim && isRenderableTherapistImageUri(avatarTrim)) {
+    return {
+      ...t,
+      avatar: avatarTrim,
+      photos: normPhotos.length > 0 ? normPhotos : t.photos,
+    };
+  }
+  const fromAlbum = normPhotos.find((u) => isRenderableTherapistImageUri(u));
+  if (fromAlbum) {
+    return { ...t, avatar: fromAlbum, photos: normPhotos.length > 0 ? normPhotos : t.photos };
+  }
+  return { ...t, avatar: avatarTrim, photos: normPhotos.length > 0 ? normPhotos : t.photos };
+}
+
+function serviceImagesListFromRow(row: JsonObject): string[] {
+  return coerceImageUrlList(row.service_images ?? row.serviceImages);
+}
+
 function mapTherapist(row: JsonObject): Therapist {
-  return {
+  const photoList = coerceImageUrlList(row.photos);
+  const galleryUrls = coerceImageUrlList(row.service_images ?? row.serviceImages);
+  const profileGalleryAvatar = galleryUrls[0] ?? '';
+  const resolvedAvatar = firstNonEmptyString([
+    row.avatar_url,
+    row.avatar,
+    row.avatar_uri,
+    row.photo_url,
+    photoList[0],
+    profileGalleryAvatar,
+  ]);
+  const latitudeRaw = Number(row.current_latitude);
+  const longitudeRaw = Number(row.current_longitude);
+  const hasLiveCoords =
+    Number.isFinite(latitudeRaw) &&
+    Number.isFinite(longitudeRaw) &&
+    latitudeRaw >= -90 &&
+    latitudeRaw <= 90 &&
+    longitudeRaw >= -180 &&
+    longitudeRaw <= 180;
+  const locationUpdatedAt =
+    typeof row.location_updated_at === 'string' ? row.location_updated_at : undefined;
+
+  const base: Therapist = {
     id: String(row.id ?? ''),
     name: String(row.name ?? 'Ky thuat vien'),
     phoneNumber: String(row.phone_number ?? ''),
     email: String(row.email ?? ''),
     gender: (String(row.gender ?? 'female') as Therapist['gender']),
-    avatar: String(row.avatar ?? ''),
-    photos: Array.isArray(row.photos) ? (row.photos as string[]) : undefined,
+    avatar: String(resolvedAvatar ?? ''),
+    photos: photoList.length > 0 ? photoList : undefined,
     bio: String(row.bio ?? ''),
     bioEn: String(row.bio_en ?? row.bio ?? ''),
     specialties: Array.isArray(row.specialties) ? (row.specialties as string[]) : [],
@@ -251,6 +457,9 @@ function mapTherapist(row: JsonObject): Therapist {
     reviewCount: Number(row.review_count ?? 0),
     hourlyRate: Number(row.hourly_rate ?? 0),
     distanceFromCenter: Number(row.distance_from_center ?? 0),
+    currentLatitude: hasLiveCoords ? latitudeRaw : undefined,
+    currentLongitude: hasLiveCoords ? longitudeRaw : undefined,
+    locationUpdatedAt,
     workingCity: typeof row.working_city === 'string' ? row.working_city : '',
     isAvailable: Boolean(row.is_available ?? true),
     availability:
@@ -261,6 +470,223 @@ function mapTherapist(row: JsonObject): Therapist {
     certifications: Array.isArray(row.certifications) ? (row.certifications as string[]) : [],
     createdAt: toIso(row.created_at),
   };
+  return coalesceTherapistAvatarFromAlbum(base);
+}
+
+/** YYYY-MM-DD theo lịch máy (không dùng UTC như toISOString) — khớp ngày lưu trong `therapist_shifts`. */
+export function getLocalDateString(d: Date = new Date()): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function normalizeTherapistId(id: string): string {
+  return String(id ?? '').trim().toLowerCase();
+}
+
+function parseHourToken(value: string): number | null {
+  const raw = value.replace(/\s/g, '').toLowerCase();
+  if (!raw) return null;
+  const colon = /^(\d{1,2}):(\d{2})$/.exec(raw);
+  if (colon) {
+    const h = Number(colon[1]);
+    if (!Number.isFinite(h) || h < 0 || h > 23) return null;
+    return h;
+  }
+  const cleaned = raw.replace(/h/g, '');
+  const hour = Number(cleaned);
+  if (!Number.isFinite(hour)) return null;
+  if (hour === 24) return 0;
+  if (hour < 0 || hour > 23) return null;
+  return hour;
+}
+
+function isCurrentHourInsideSlot(slot: string, nowHour: number): boolean {
+  const [rawStart, rawEnd] = slot.split('-').map((item) => item.trim());
+  if (!rawStart || !rawEnd) return false;
+  const start = parseHourToken(rawStart);
+  const end = parseHourToken(rawEnd);
+  if (start === null || end === null) return false;
+  if (start === end) return true;
+  if (start < end) return nowHour >= start && nowHour < end;
+  return nowHour >= start || nowHour < end;
+}
+
+function isTherapistWorkingNow(slots: string[], nowHour: number): boolean {
+  return slots.some((slot) => isCurrentHourInsideSlot(slot, nowHour));
+}
+
+/** Ca đã đăng ký trong `therapist_shifts` hôm nay, hoặc ca ảo (demo) — `null` nếu không có dữ liệu ca. */
+function slotsForTherapistOnDate(
+  therapistId: string,
+  shiftMap: Map<string, string[]>,
+  today: string,
+): string[] | null {
+  const key = normalizeTherapistId(therapistId);
+  if (shiftMap.has(key)) {
+    return shiftMap.get(key) ?? [];
+  }
+  const virtualShifts = getVirtualTherapistShifts(therapistId, today, today);
+  if (!virtualShifts?.length) return null;
+  const row = virtualShifts.find((r) => r.shiftDate === today);
+  return row ? row.slots : null;
+}
+
+/**
+ * Chỉ KTV: bật is_available + đã đăng ký ca hôm nay (có slot) + đang trong khung giờ ca.
+ * Dùng cho danh sách thay thế khi chờ xác nhận và cho getTherapists().
+ */
+export async function filterTherapistsEligibleForBookingNow(therapists: Therapist[]): Promise<Therapist[]> {
+  const today = getLocalDateString();
+  const shifts = await getTherapistShiftsForDate(today).catch(() => []);
+  const shiftMap = new Map<string, string[]>();
+  for (const s of shifts) {
+    shiftMap.set(normalizeTherapistId(s.userId), s.slots);
+  }
+  const nowHour = new Date().getHours();
+  return therapists.filter((t) => {
+    if (!t.isAvailable) return false;
+    const slots = slotsForTherapistOnDate(t.id, shiftMap, today);
+    if (!slots || slots.length === 0) return false;
+    return isTherapistWorkingNow(slots, nowHour);
+  });
+}
+
+/**
+ * Kiểm tra KTV có thể bấm “Đặt ngay” lúc này.
+ * - Không có dòng ca nào trong `therapist_shifts` cho hôm nay (cả hệ thống) → cho qua (chưa dùng lịch ca).
+ * - Đã có ít nhất một KTV đăng ký ca hôm nay: KTV này phải có dòng ca + slot + trong giờ (KTV ảo: lịch demo).
+ */
+export async function therapistEligibleForInstantBookNow(therapistId: string): Promise<boolean> {
+  const therapist = await getTherapistById(therapistId);
+  if (!therapist?.isAvailable) return false;
+
+  const today = getLocalDateString();
+  const rows = await getTherapistShiftsForDate(today).catch(() => []);
+  if (rows.length === 0) {
+    return true;
+  }
+
+  const mine = rows.find((r) => normalizeTherapistId(r.userId) === normalizeTherapistId(therapistId));
+  if (!mine) {
+    if (isVirtualTherapistId(therapistId)) {
+      const [ok] = await filterTherapistsEligibleForBookingNow([therapist]);
+      return Boolean(ok);
+    }
+    return false;
+  }
+
+  const slots = mine.slots ?? [];
+  if (slots.length === 0) return false;
+
+  const nowHour = new Date().getHours();
+  return isTherapistWorkingNow(slots, nowHour);
+}
+
+function resolveAvatarFromProfileRow(row: JsonObject): string {
+  const urls = coerceImageUrlList(row.service_images ?? row.serviceImages);
+  const profileGalleryAvatar = urls[0] ?? '';
+  return firstNonEmptyString([row.avatar_url, row.avatar, row.avatar_uri, profileGalleryAvatar]);
+}
+
+async function hydrateTherapistAvatarsFromProfiles(therapists: Therapist[]): Promise<Therapist[]> {
+  if (therapists.length === 0) {
+    return therapists;
+  }
+
+  const therapistIds = therapists.map((item) => item.id).filter(Boolean);
+  if (therapistIds.length === 0) {
+    return therapists;
+  }
+
+  const { data, error } = await withTimeout(
+    supabase.from('profiles').select('*').in('id', therapistIds),
+  );
+  const fallbackCoalesce = () => therapists.map((item) => coalesceTherapistAvatarFromAlbum(item));
+
+  if (error || !Array.isArray(data)) {
+    return fallbackCoalesce();
+  }
+  if (data.length === 0) {
+    return fallbackCoalesce();
+  }
+
+  const profileById = new Map<string, JsonObject>();
+  for (const row of data as JsonObject[]) {
+    const id = String(row.id ?? '');
+    if (id) profileById.set(id, row);
+  }
+
+  let merged = therapists.map((item) => {
+    const profileRow = profileById.get(item.id);
+    const photos = [...(item.photos ?? [])];
+    if (profileRow) {
+      const fromProfile = serviceImagesListFromRow(profileRow);
+      for (const u of fromProfile) {
+        if (!photos.includes(u)) photos.push(u);
+      }
+    }
+
+    let avatar = item.avatar;
+    if (profileRow) {
+      const resolved = resolveAvatarFromProfileRow(profileRow);
+      if (resolved) {
+        avatar = resolved;
+      }
+    }
+
+    return coalesceTherapistAvatarFromAlbum({
+      ...item,
+      photos: photos.length > 0 ? photos : undefined,
+      avatar,
+    });
+  });
+
+  const missingIds = merged
+    .filter((item) => !resolveTherapistImageUriForUi(item))
+    .map((item) => item.id)
+    .filter(Boolean);
+
+  if (missingIds.length === 0) {
+    return merged;
+  }
+
+  const { data: appRows, error: appErr } = await withTimeout(
+    supabase
+      .from('partner_applications')
+      .select('user_id, payload, created_at')
+      .in('user_id', missingIds)
+      .order('created_at', { ascending: false }),
+  );
+
+  if (appErr || !Array.isArray(appRows) || appRows.length === 0) {
+    return merged;
+  }
+
+  const payloadByUserId = new Map<string, unknown>();
+  for (const row of appRows as { user_id?: unknown; payload?: unknown }[]) {
+    const uid = String(row.user_id ?? '');
+    if (!uid || payloadByUserId.has(uid)) continue;
+    payloadByUserId.set(uid, row.payload);
+  }
+
+  merged = merged.map((item) => {
+    if (resolveTherapistImageUriForUi(item)) return item;
+    const payload = payloadByUserId.get(item.id);
+    const extra = partnerPayloadImageUris(payload);
+    if (extra.length === 0) return item;
+    const photos = [...(item.photos ?? [])];
+    for (const u of extra) {
+      if (!photos.includes(u)) photos.push(u);
+    }
+    return coalesceTherapistAvatarFromAlbum({
+      ...item,
+      photos: photos.length > 0 ? photos : undefined,
+    });
+  });
+
+  return merged;
 }
 
 function mapPromotion(row: JsonObject): Promotion {
@@ -280,21 +706,43 @@ function mapPromotion(row: JsonObject): Promotion {
   };
 }
 
+/** Mã chỉ dùng được khi còn hạn, đang bật, có quota (max_uses > 0) và chưa hết lượt. */
+export function isPromotionRedeemable(p: Promotion, nowIso: string): boolean {
+  if (!p.isActive) return false;
+  if (p.expiryDate && p.expiryDate < nowIso) return false;
+  if (p.maxUses <= 0) return false;
+  return p.currentUses < p.maxUses;
+}
+
+export function computePromoDiscount(subtotal: number, p: Promotion): number {
+  if (subtotal <= 0) return 0;
+  const minOrder = Number(p.minOrderAmount) || 0;
+  if (subtotal < minOrder) return 0;
+  let off = Math.round(subtotal * (p.discountPercent / 100));
+  const cap = Number(p.maxDiscountAmount) || 0;
+  if (cap > 0) off = Math.min(off, cap);
+  return Math.min(off, subtotal);
+}
+
 function payloadToRecord(row: JsonObject): JsonObject & { id: string } {
   const payload =
     typeof row.payload === 'object' && row.payload !== null ? (row.payload as JsonObject) : {};
+  const merged =
+    payload.paymentMethod !== undefined
+      ? { ...payload, paymentMethod: mapGlowPaymentMethodIdToZenaUnknown(payload.paymentMethod) }
+      : { ...payload };
   return {
-    ...payload,
+    ...merged,
     id: String(row.id ?? ''),
-    status: row.status ?? payload.status,
-    createdAt: row.created_at ?? payload.createdAt,
-    updatedAt: row.updated_at ?? payload.updatedAt,
+    status: row.status ?? merged.status,
+    createdAt: row.created_at ?? merged.createdAt,
+    updatedAt: row.updated_at ?? merged.updatedAt,
   };
 }
 
 /**
  * CUSTOM AUTH (phone + password, no Supabase Auth)
- * Password is hashed with bcrypt server-side via pgcrypto.
+ * Password is hashed server-side via pgcrypto.
  */
 export async function signUpWithPhone(phoneNumber: string, password: string): Promise<string> {
   const phone = normalizePhone(phoneNumber);
@@ -307,47 +755,61 @@ export async function signUpWithPhone(phoneNumber: string, password: string): Pr
   );
   if (error) {
     console.warn('[signUpWithPhone] RPC error:', error.message, error.code, error.details, error.hint);
+    debugLog('signUpWithPhone', 'rpc error', {
+      message: error.message,
+      code: error.code,
+      details: error.details,
+      hint: error.hint,
+    });
     const msg = (error.message ?? '').toLowerCase();
-    if (msg.includes('phone_already_registered') || msg.includes('unique')) {
-      // Phone exists in app_users — try to sign in with same password
+    const code = String((error as { code?: string }).code ?? '').toLowerCase();
+    if (
+      msg.includes('phone_already_registered') ||
+      msg.includes('unique') ||
+      (code === 'p0001' && msg.includes('phone_already'))
+    ) {
+      // SĐT đã có trong profiles — thử đăng nhập cùng mật khẩu
       const existingUid = await signInWithPhonePassword(phone, password);
       if (existingUid) {
         return existingUid; // Same phone + same password → return existing UID
       }
       throw new Error('phone_already_registered');
     }
+
     throw new Error(error.message || `Supabase error ${error.code}`);
   }
-  return data as string; // returns UUID
+  const uid =
+    typeof data === 'string' && data.trim().length > 0
+      ? data.trim()
+      : data != null && String(data).trim().length > 0
+        ? String(data).trim()
+        : '';
+  if (!uid || uid === 'null') {
+    throw new Error('signup_no_uid_response');
+  }
+  return uid;
 }
 
 export async function signInWithPhonePassword(phoneNumber: string, password: string): Promise<string | null> {
   const phone = normalizePhone(phoneNumber);
-
-  // Step 1: Fetch user row by phone (fast REST query, no bcrypt on server)
-  const { data: user, error } = await withTimeout(
-    supabase
-      .from('app_users')
-      .select('id, password_hash')
-      .eq('phone_number', phone)
-      .maybeSingle(),
+  const { data, error } = await withAuthTimeout(
+    supabase.rpc('signin_with_phone', {
+      p_phone: phone,
+      p_password: password,
+    }),
   );
 
   if (error) {
-    console.warn('[signInWithPhonePassword] query error:', error.message);
-    throw error;
+    console.warn('[signInWithPhonePassword] RPC error:', error.message, error.code, error.details, error.hint);
+    debugLog('signInWithPhonePassword', 'rpc error', {
+      message: error.message,
+      code: error.code,
+      details: error.details,
+      hint: error.hint,
+    });
+    throw new Error(error.message || `Supabase error ${error.code}`);
   }
-  if (!user) {
-    return null; // phone not found
-  }
-
-  // Step 2: Verify password client-side with bcryptjs (pure JS, fast)
-  const match = bcrypt.compareSync(password, user.password_hash);
-  if (!match) {
-    return null; // wrong password
-  }
-
-  return user.id as string;
+  return (data as string | null) ?? null;
 }
 
 export async function signInUserAccountWithPhone(
@@ -361,12 +823,11 @@ export async function signInUserAccountWithPhone(
   let profile = await getUserProfileByUid(uid);
   if (profile) return profile;
 
-  // Fallback: search profile by phone number (handles cases where profile
-  // exists with a different id than the app_users uid)
+  // Fallback: tìm profile theo SĐT (dữ liệu cũ lệch id)
   const phone = normalizePhone(phoneNumber);
   profile = await getUserProfileByPhone(phone);
   if (profile) {
-    // Update profile id to match app_users uid for consistency
+    // Gộp authUid về uid vừa đăng nhập
     const corrected = { ...profile, authUid: uid };
     await upsertUserProfile(corrected);
     return corrected;
@@ -421,33 +882,66 @@ const THERAPISTS_CACHE_TTL_MS = 45_000;
 let therapistsCache: { list: Therapist[]; fetchedAt: number } | null = null;
 let therapistsFetchInFlight: Promise<Therapist[]> | null = null;
 
+export function invalidateTherapistsListCache(): void {
+  therapistsCache = null;
+  therapistsFetchInFlight = null;
+}
+
+/**
+ * Ghép `is_available` (DB) với ca hôm nay.
+ * KTV thật: phải có dòng `therapist_shifts` + slot không rỗng + đang trong khung giờ mới “sẵn sàng”.
+ * KTV ảo (demo): dùng lịch ảo từ `getVirtualTherapistShifts`.
+ */
+async function applyTherapistShiftAvailabilityForToday(hydrated: Therapist[]): Promise<Therapist[]> {
+  const today = getLocalDateString();
+  const shifts = await getTherapistShiftsForDate(today).catch(() => []);
+  const shiftMap = new Map<string, string[]>();
+  for (const shift of shifts) {
+    shiftMap.set(normalizeTherapistId(shift.userId), shift.slots);
+  }
+  const nowHour = new Date().getHours();
+  return hydrated.map((item) => {
+    const slots = slotsForTherapistOnDate(item.id, shiftMap, today);
+    const shiftAllows =
+      slots != null && slots.length > 0 && isTherapistWorkingNow(slots, nowHour);
+    return {
+      ...item,
+      isAvailable: Boolean(item.isAvailable) && shiftAllows,
+    };
+  });
+}
+
 async function fetchTherapistsUncached(): Promise<Therapist[]> {
   // First try RPC that filters by minimum wallet balance (500,000đ)
   try {
     const { data: rpcData, error: rpcError } = await withTimeout(
       supabase.rpc('get_available_therapists_with_min_balance', { p_min_balance: 500000 }),
     );
-    if (!rpcError && rpcData) {
-      return (rpcData as JsonObject[]).map((row: JsonObject) => mapTherapist(row));
+    if (!rpcError && Array.isArray(rpcData) && rpcData.length > 0) {
+      const mapped = (rpcData as JsonObject[]).map((row: JsonObject) => mapTherapist(row));
+      const hydrated = await hydrateTherapistAvatarsFromProfiles(mapped);
+      return applyTherapistShiftAvailabilityForToday(hydrated);
     }
   } catch {
     // Fallback to basic query
   }
 
-  // Fallback: basic query (is_available = true only)
+  // Fallback: get all therapists, then compute real-time availability from registered shifts.
   const { data, error } = await withTimeout(
-    supabase.from('therapists').select('*').eq('is_available', true),
+    supabase.from('therapists').select('*'),
   );
   if (error || !data) {
     warnCatalogPermissionOnce(error);
-    return FALLBACK_THERAPISTS;
+    return [];
   }
-  return (data as JsonObject[]).map((row: JsonObject) => mapTherapist(row));
+  const mapped = (data as JsonObject[]).map((row: JsonObject) => mapTherapist(row));
+  const hydrated = await hydrateTherapistAvatarsFromProfiles(mapped);
+  return applyTherapistShiftAvailabilityForToday(hydrated);
 }
 
-export async function getTherapists(): Promise<Therapist[]> {
-  if (IS_TEST_MODE) {
-    return MOCK_THERAPISTS.filter((t) => t.isAvailable);
+export async function getTherapists(opts?: { bypassCache?: boolean }): Promise<Therapist[]> {
+  if (opts?.bypassCache) {
+    therapistsCache = null;
   }
   const now = Date.now();
   if (therapistsCache && now - therapistsCache.fetchedAt < THERAPISTS_CACHE_TTL_MS) {
@@ -458,12 +952,9 @@ export async function getTherapists(): Promise<Therapist[]> {
   }
   therapistsFetchInFlight = (async () => {
     try {
-      const list = await fetchTherapistsUncached();
-      // If Supabase returns empty list (often due to RLS/mis-config in dev),
-      // fall back to local mock data so the booking flow always has KTV.
-      const safeList = list.length > 0 ? list : MOCK_THERAPISTS.filter((t) => t.isAvailable);
-      therapistsCache = { list: safeList, fetchedAt: Date.now() };
-      return safeList;
+      const list = mergeVirtualTherapists(await fetchTherapistsUncached());
+      therapistsCache = { list, fetchedAt: Date.now() };
+      return list;
     } finally {
       therapistsFetchInFlight = null;
     }
@@ -472,73 +963,63 @@ export async function getTherapists(): Promise<Therapist[]> {
 }
 
 export async function getTherapistById(therapistId: string): Promise<Therapist | null> {
-  if (IS_TEST_MODE) {
-    return MOCK_THERAPISTS.find((t) => t.id === therapistId) ?? null;
+  const virtual = findVirtualTherapistById(therapistId);
+  if (virtual) {
+    return virtual;
   }
   const { data, error } = await withTimeout(
     supabase.from('therapists').select('*').eq('id', therapistId).maybeSingle(),
   );
   if (error || !data) {
     warnCatalogPermissionOnce(error);
-    return FALLBACK_THERAPISTS.find((item) => item.id === therapistId) ?? null;
+    return null;
   }
-  return mapTherapist(data as JsonObject);
+  const therapist = mapTherapist(data as JsonObject);
+  const [hydrated] = await hydrateTherapistAvatarsFromProfiles([therapist]);
+  return hydrated ?? therapist;
 }
 
 export async function getTherapistsBySpecialty(specialty: string): Promise<Therapist[]> {
   const therapists = await getTherapists();
   return therapists.filter((therapist) =>
-    therapist.specialties.some((item) => item.toLowerCase().includes(specialty.toLowerCase())),
+    (therapist.specialties ?? []).some((item) => item.toLowerCase().includes(specialty.toLowerCase())),
   );
+}
+
+export async function updateTherapistLiveLocation(
+  userId: string,
+  coords: { latitude: number; longitude: number },
+): Promise<void> {
+  const latitude = Number(coords.latitude);
+  const longitude = Number(coords.longitude);
+  if (
+    !Number.isFinite(latitude) ||
+    !Number.isFinite(longitude) ||
+    latitude < -90 ||
+    latitude > 90 ||
+    longitude < -180 ||
+    longitude > 180
+  ) {
+    throw new Error('invalid-location-coordinates');
+  }
+
+  const { error } = await withTimeout(
+    supabase.rpc('update_therapist_live_location', {
+      p_user_id: userId,
+      p_latitude: latitude,
+      p_longitude: longitude,
+      p_location_updated_at: new Date().toISOString(),
+    }),
+  );
+  if (error) {
+    throw error;
+  }
+  therapistsCache = null;
 }
 
 /**
  * BOOKINGS
  */
-// ─────────────────────────────────────────────────────────────────────────────
-// Test mode stores (in-memory)
-// ─────────────────────────────────────────────────────────────────────────────
-type TestSharedBooking = {
-  id: string;
-  customerName: string;
-  customerPhone: string;
-  therapistId: string;
-  therapistName: string;
-  therapistAvatar?: string;
-  service: string;
-  date: string;
-  time: string;
-  address: string;
-  price: number;
-  status: string;
-  createdAt: string;
-  reviewed?: boolean;
-};
-
-type TestChatRoom = ChatRoom; // reuse app shape
-type TestChatMessage = ChatMessage; // reuse app shape
-
-const testSharedBookings: Record<string, TestSharedBooking> = {};
-let testBookingIdCounter = 1;
-
-const testChatRooms: TestChatRoom[] = [];
-const testChatMessages: TestChatMessage[] = [];
-const testChatListeners: Record<string, Set<(msg: TestChatMessage) => void>> = {};
-
-let testRoomIdCounter = 1;
-
-function makeTestBookingId(): string {
-  const id = `test-booking-${testBookingIdCounter}`;
-  testBookingIdCounter += 1;
-  return id;
-}
-
-function makeTestRoomId(): string {
-  const id = `test-room-${testRoomIdCounter}`;
-  testRoomIdCounter += 1;
-  return id;
-}
-
 export async function createBooking(bookingData: Omit<Booking, 'id'>): Promise<string> {
   const now = new Date().toISOString();
   const payload = { ...bookingData, createdAt: bookingData.createdAt ?? now };
@@ -590,52 +1071,14 @@ export async function updateBookingStatus(bookingId: string, status: Booking['st
 }
 
 export async function createSharedBookingRecord(data: Record<string, unknown>): Promise<string> {
-  if (IS_TEST_MODE) {
-    const now = new Date().toISOString();
-    const uid = await getStoredUid();
-    const userId = uid || String(data.userId ?? data.customerPhone ?? '');
-
-    const id = makeTestBookingId();
-    const record: TestSharedBooking = {
-      id,
-      customerName: String(data.customerName ?? ''),
-      customerPhone: String(data.customerPhone ?? ''),
-      therapistId: String(data.therapistId ?? ''),
-      therapistName: String(data.therapistName ?? ''),
-      therapistAvatar: typeof data.therapistAvatar === 'string' ? data.therapistAvatar : undefined,
-      service: String(data.service ?? ''),
-      date: String(data.date ?? ''),
-      time: String(data.time ?? ''),
-      address: String(data.address ?? ''),
-      price: Number(data.price ?? 0),
-      status: String(data.status ?? 'pending'),
-      createdAt: String(data.createdAt ?? now),
-      reviewed: Boolean(data.reviewed ?? false),
-    };
-
-    testSharedBookings[id] = record;
-
-    // Create a chat room for this booking so ChatScreen(bookingId) can open directly.
-    const therapistId = record.therapistId;
-    const customerId = userId;
-    const room: ChatRoom = {
-      id: makeTestRoomId(),
-      bookingId: id,
-      customerId,
-      therapistId,
-      customerName: record.customerName,
-      therapistName: record.therapistName,
-      isActive: true,
-      createdAt: now,
-      updatedAt: now,
-    };
-    testChatRooms.unshift(room);
-
-    return id;
-  }
   const now = new Date().toISOString();
   const uid = await getStoredUid();
   const userId = uid || String(data.userId ?? data.customerPhone ?? '');
+  const basePayload = { ...data, createdAt: data.createdAt ?? now };
+  const payload =
+    basePayload.paymentMethod !== undefined
+      ? { ...basePayload, paymentMethod: mapGlowPaymentMethodIdToZenaUnknown(basePayload.paymentMethod) }
+      : basePayload;
   const { data: row, error } = await withTimeout(
     supabase
       .from('bookings')
@@ -643,7 +1086,7 @@ export async function createSharedBookingRecord(data: Record<string, unknown>): 
         user_id: userId,
         therapist_id: String(data.therapistId ?? ''),
         status: String(data.status ?? 'pending'),
-        payload: { ...data, createdAt: data.createdAt ?? now },
+        payload,
       })
       .select('id')
       .single(),
@@ -655,45 +1098,16 @@ export async function createSharedBookingRecord(data: Record<string, unknown>): 
 }
 
 export async function deleteBookingRecord(bookingId: string): Promise<void> {
-  if (IS_TEST_MODE) {
-    delete testSharedBookings[bookingId];
-    // Best-effort cleanup: remove chat room(s) and their messages.
-    const roomsToDelete = testChatRooms.filter((r) => r.bookingId === bookingId);
-    if (roomsToDelete.length > 0) {
-      const roomIds = new Set(roomsToDelete.map((r) => r.id));
-      for (const roomId of roomIds) {
-        for (let i = testChatMessages.length - 1; i >= 0; i--) {
-          if (testChatMessages[i].roomId === roomId) testChatMessages.splice(i, 1);
-        }
-      }
-    }
-    for (let i = testChatRooms.length - 1; i >= 0; i--) {
-      if (testChatRooms[i].bookingId === bookingId) testChatRooms.splice(i, 1);
-    }
-    return;
-  }
   const { error } = await withTimeout(supabase.from('bookings').delete().eq('id', bookingId));
   if (error) throw error;
 }
 
-/** Merge payload and optionally set top-level status (e.g. confirm after Glow payment). */
+/** Merge payload and optionally set top-level status (e.g. confirm after Zena wallet payment). */
 export async function mergeBookingPayload(
   bookingId: string,
   patch: Record<string, unknown>,
   status?: string,
 ): Promise<void> {
-  if (IS_TEST_MODE) {
-    const prev = testSharedBookings[bookingId];
-    if (!prev) return;
-    const nextStatus = status ?? prev.status;
-    testSharedBookings[bookingId] = {
-      ...prev,
-      ...patch,
-      status: nextStatus,
-      createdAt: prev.createdAt,
-    } as TestSharedBooking;
-    return;
-  }
   const { data: row, error: e1 } = await withTimeout(
     supabase.from('bookings').select('payload').eq('id', bookingId).maybeSingle(),
   );
@@ -702,8 +1116,12 @@ export async function mergeBookingPayload(
     row && typeof row.payload === 'object' && row.payload !== null
       ? (row.payload as Record<string, unknown>)
       : {};
+  const patchNorm = { ...patch };
+  if ('paymentMethod' in patchNorm) {
+    patchNorm.paymentMethod = mapGlowPaymentMethodIdToZenaUnknown(patchNorm.paymentMethod);
+  }
   const update: Record<string, unknown> = {
-    payload: { ...prev, ...patch },
+    payload: { ...prev, ...patchNorm },
     updated_at: new Date().toISOString(),
   };
   if (status) update.status = status;
@@ -716,10 +1134,6 @@ export async function confirmPayosForBookingUser(
   orderCode: number,
   userId: string,
 ): Promise<{ ok: boolean; reason?: string; bookingId?: string }> {
-  if (IS_TEST_MODE) {
-    // Always succeed in test mode; ServiceBookingScreen will fallback to getBookingStatus if needed.
-    return { ok: true };
-  }
   const { data, error } = await withTimeout(
     supabase.rpc('confirm_payos_for_booking_user', {
       p_order_code: orderCode,
@@ -736,9 +1150,6 @@ export async function confirmPayosForBookingUser(
 }
 
 export async function getBookingStatus(bookingId: string): Promise<string | null> {
-  if (IS_TEST_MODE) {
-    return testSharedBookings[bookingId]?.status ?? null;
-  }
   const { data, error } = await withTimeout(
     supabase.from('bookings').select('status').eq('id', bookingId).maybeSingle(),
   );
@@ -747,11 +1158,6 @@ export async function getBookingStatus(bookingId: string): Promise<string | null
 }
 
 export async function getSharedBookingRecords(): Promise<(Record<string, unknown> & { id: string })[]> {
-  if (IS_TEST_MODE) {
-    return Object.values(testSharedBookings)
-      .map((b) => ({ ...b }))
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  }
   const { data, error } = await withTimeout(
     supabase.from('bookings').select('*').order('created_at', { ascending: false }),
   );
@@ -763,13 +1169,19 @@ export async function getSharedBookingRecords(): Promise<(Record<string, unknown
   })[];
 }
 
-export async function updateSharedBookingStatus(bookingId: string, status: string): Promise<void> {
-  if (IS_TEST_MODE) {
-    const prev = testSharedBookings[bookingId];
-    if (!prev) return;
-    testSharedBookings[bookingId] = { ...prev, status };
-    return;
+export async function getSharedBookingRecordById(
+  bookingId: string,
+): Promise<(Record<string, unknown> & { id: string }) | null> {
+  const { data, error } = await withTimeout(
+    supabase.from('bookings').select('*').eq('id', bookingId).maybeSingle(),
+  );
+  if (error || !data) {
+    return null;
   }
+  return payloadToRecord(data as JsonObject) as Record<string, unknown> & { id: string };
+}
+
+export async function updateSharedBookingStatus(bookingId: string, status: string): Promise<void> {
   const { error } = await withTimeout(
     supabase.from('bookings').update({ status }).eq('id', bookingId),
   );
@@ -778,13 +1190,275 @@ export async function updateSharedBookingStatus(bookingId: string, status: strin
   }
 }
 
-export async function cancelBooking(bookingId: string, reason: string): Promise<void> {
-  if (IS_TEST_MODE) {
-    const prev = testSharedBookings[bookingId];
-    if (!prev) return;
-    testSharedBookings[bookingId] = { ...prev, status: 'cancelled', cancellationReason: reason } as unknown as TestSharedBooking;
-    return;
+/**
+ * Huỷ đơn từ app khách theo RPC backend (idempotent, lưu metadata huỷ vào payload).
+ * Trả về `true` khi backend xác nhận update thành công.
+ */
+export async function cancelSharedBookingAsCustomer(
+  bookingId: string,
+  customerUserId?: string,
+  reason?: string,
+): Promise<boolean> {
+  const { data, error } = await withTimeout(
+    supabase.rpc('customer_cancel_booking', {
+      p_booking_id: bookingId,
+      p_customer_user_id: customerUserId ?? null,
+      p_reason: reason ?? null,
+    }),
+  );
+  if (error) {
+    // Fallback cho môi trường chưa chạy migration 045.
+    await updateSharedBookingStatus(bookingId, 'cancelled');
+    return true;
   }
+  return data === true;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Bảng riêng `cancelled_bookings` (migration 046) — nguồn dữ liệu cho tab
+// "Đã huỷ" ở Activity. Lưu snapshot toàn bộ hoá đơn + thời điểm huỷ.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface CancelledBookingSnapshotInput {
+  bookingId?: string | null;
+  customerUserId?: string | null;
+  customerPhone?: string | null;
+  customerName?: string | null;
+  customerEmail?: string | null;
+  therapistId?: string | null;
+  therapistName?: string | null;
+  therapistAvatar?: string | null;
+  service?: string | null;
+  date?: string | null;
+  time?: string | null;
+  address?: string | null;
+  price?: number | null;
+  paymentMethod?: string | null;
+  cancelReason?: string | null;
+  cancelledBy?: 'customer' | 'system' | 'therapist' | string | null;
+  cancelledAt?: string | null;
+  customerCartSnapshot?: Array<{ name: string; duration: number; price: number }> | null;
+  customerLat?: number | null;
+  customerLng?: number | null;
+  /** Bất kỳ field bổ sung nào để rebuild "Đặt lại". */
+  extras?: Record<string, unknown> | null;
+}
+
+function buildCancelledBookingPayload(
+  input: CancelledBookingSnapshotInput,
+): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    cancelledBy: input.cancelledBy ?? 'customer',
+    cancelReason: input.cancelReason ?? 'customer_cancelled',
+    cancelledAt: input.cancelledAt ?? new Date().toISOString(),
+  };
+  const assignString = (key: string, value: string | null | undefined) => {
+    if (typeof value === 'string' && value.trim() !== '') {
+      payload[key] = value.trim();
+    }
+  };
+  const assignNumber = (key: string, value: number | null | undefined) => {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      payload[key] = value;
+    }
+  };
+  assignString('bookingId', input.bookingId ?? undefined);
+  assignString('customerUserId', input.customerUserId ?? undefined);
+  assignString('customerPhone', input.customerPhone ?? undefined);
+  assignString('customerName', input.customerName ?? undefined);
+  assignString('customerEmail', input.customerEmail ?? undefined);
+  assignString('therapistId', input.therapistId ?? undefined);
+  assignString('therapistName', input.therapistName ?? undefined);
+  assignString('therapistAvatar', input.therapistAvatar ?? undefined);
+  assignString('service', input.service ?? undefined);
+  assignString('date', input.date ?? undefined);
+  assignString('time', input.time ?? undefined);
+  assignString('address', input.address ?? undefined);
+  assignNumber('price', input.price ?? undefined);
+  assignString('paymentMethod', input.paymentMethod ?? undefined);
+  assignNumber('customerLat', input.customerLat ?? undefined);
+  assignNumber('customerLng', input.customerLng ?? undefined);
+  if (Array.isArray(input.customerCartSnapshot) && input.customerCartSnapshot.length > 0) {
+    payload.customerCartSnapshot = input.customerCartSnapshot;
+  }
+  if (input.extras && typeof input.extras === 'object') {
+    Object.assign(payload, input.extras);
+  }
+  return payload;
+}
+
+/**
+ * Ghi 1 đơn huỷ vào bảng `cancelled_bookings` (idempotent theo bookingId).
+ * Trả về id của bản ghi vừa tạo (hoặc null nếu RPC không khả dụng).
+ */
+export async function recordCancelledBooking(
+  input: CancelledBookingSnapshotInput,
+): Promise<string | null> {
+  const payload = buildCancelledBookingPayload(input);
+  try {
+    const { data, error } = await withTimeout(
+      supabase.rpc('record_cancelled_booking', { p_payload: payload }),
+    );
+    if (error) {
+      console.warn('[recordCancelledBooking] RPC error:', error.message);
+      return null;
+    }
+    return typeof data === 'string' ? data : null;
+  } catch (err) {
+    console.warn('[recordCancelledBooking] Failed:', err);
+    return null;
+  }
+}
+
+export interface CancelledBookingRecord {
+  id: string;
+  bookingId?: string;
+  customerUserId?: string;
+  customerPhone?: string;
+  customerName?: string;
+  customerEmail?: string;
+  therapistId?: string;
+  therapistName?: string;
+  therapistAvatar?: string;
+  service?: string;
+  date?: string;
+  time?: string;
+  address?: string;
+  price: number;
+  paymentMethod?: string;
+  cancelReason?: string;
+  cancelledBy?: string;
+  cancelledAt: string;
+  payload: Record<string, unknown>;
+}
+
+function asString(value: unknown): string | undefined {
+  if (typeof value === 'string' && value.trim() !== '') {
+    return value;
+  }
+  return undefined;
+}
+
+function rowToCancelledRecord(row: Record<string, unknown>): CancelledBookingRecord | null {
+  const id = asString(row.id);
+  if (!id) return null;
+  const cancelledAt = asString(row.cancelled_at) ?? new Date().toISOString();
+  const priceRaw = row.price;
+  const price = typeof priceRaw === 'number'
+    ? priceRaw
+    : typeof priceRaw === 'string'
+      ? Number(priceRaw) || 0
+      : 0;
+  const payload =
+    row.payload && typeof row.payload === 'object' && !Array.isArray(row.payload)
+      ? (row.payload as Record<string, unknown>)
+      : {};
+  return {
+    id,
+    bookingId: asString(row.booking_id),
+    customerUserId: asString(row.customer_user_id),
+    customerPhone: asString(row.customer_phone),
+    customerName: asString(row.customer_name),
+    customerEmail: asString(row.customer_email),
+    therapistId: asString(row.therapist_id),
+    therapistName: asString(row.therapist_name),
+    therapistAvatar: asString(row.therapist_avatar),
+    service: asString(row.service),
+    date: asString(row.date),
+    time: asString(row.time),
+    address: asString(row.address),
+    price,
+    paymentMethod: asString(row.payment_method),
+    cancelReason: asString(row.cancel_reason),
+    cancelledBy: asString(row.cancelled_by),
+    cancelledAt,
+    payload,
+  };
+}
+
+export async function getCustomerCancelledBookings(opts: {
+  customerUserId?: string | null;
+  customerPhone?: string | null;
+  limit?: number;
+}): Promise<CancelledBookingRecord[]> {
+  const userId = opts.customerUserId?.trim() || null;
+  const phone = opts.customerPhone?.trim() || null;
+  if (!userId && !phone) return [];
+  try {
+    const { data, error } = await withTimeout(
+      supabase.rpc('list_customer_cancelled_bookings', {
+        p_customer_user_id: userId,
+        p_customer_phone: phone,
+        p_limit: opts.limit ?? 50,
+      }),
+    );
+    if (error) {
+      console.warn('[getCustomerCancelledBookings] RPC error:', error.message);
+      return [];
+    }
+    if (!Array.isArray(data)) return [];
+    const out: CancelledBookingRecord[] = [];
+    for (const row of data) {
+      if (row && typeof row === 'object') {
+        const rec = rowToCancelledRecord(row as Record<string, unknown>);
+        if (rec) out.push(rec);
+      }
+    }
+    return out;
+  } catch (err) {
+    console.warn('[getCustomerCancelledBookings] Failed:', err);
+    return [];
+  }
+}
+
+export async function reassignSharedBookingTherapist(
+  bookingId: string,
+  patch: {
+    therapistId: string;
+    therapistName: string;
+    therapistAvatar?: string;
+    price?: number;
+    distanceKm?: number;
+  },
+): Promise<void> {
+  const { data: row, error: readError } = await withTimeout(
+    supabase.from('bookings').select('payload').eq('id', bookingId).maybeSingle(),
+  );
+  if (readError) {
+    throw readError;
+  }
+  const prev =
+    row && typeof row.payload === 'object' && row.payload !== null
+      ? (row.payload as Record<string, unknown>)
+      : {};
+  const nextPayload: Record<string, unknown> = {
+    ...prev,
+    therapistId: patch.therapistId,
+    therapistName: patch.therapistName,
+    therapistAvatar: patch.therapistAvatar ?? '',
+  };
+  if (typeof patch.price === 'number' && Number.isFinite(patch.price)) {
+    nextPayload.price = patch.price;
+  }
+  if (typeof patch.distanceKm === 'number' && Number.isFinite(patch.distanceKm)) {
+    nextPayload.distanceKm = patch.distanceKm;
+  }
+  const { error } = await withTimeout(
+    supabase
+      .from('bookings')
+      .update({
+        therapist_id: patch.therapistId,
+        payload: nextPayload,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', bookingId),
+  );
+  if (error) {
+    throw error;
+  }
+}
+
+export async function cancelBooking(bookingId: string, reason: string): Promise<void> {
   const { error } = await withTimeout(
     supabase
       .from('bookings')
@@ -903,31 +1577,169 @@ export async function getActivePromotions(): Promise<Promotion[]> {
   );
   if (error || !data) {
     warnCatalogPermissionOnce(error);
-    return FALLBACK_PROMOTIONS;
+    return [];
   }
   const now = new Date().toISOString();
   return (data as JsonObject[])
     .map((row: JsonObject) => mapPromotion(row))
-    .filter((promotion: Promotion) => !promotion.expiryDate || promotion.expiryDate >= now);
+    .filter((promotion: Promotion) => isPromotionRedeemable(promotion, now));
 }
 
 export async function verifyPromoCode(code: string): Promise<Promotion | null> {
   const { data, error } = await withTimeout(
-    supabase.from('promotions').select('*').eq('code', code.toUpperCase()).maybeSingle(),
+    supabase.from('promotions').select('*').eq('code', code.toUpperCase().trim()).maybeSingle(),
   );
   if (error || !data) {
     warnCatalogPermissionOnce(error);
-    return FALLBACK_PROMOTIONS.find((item) => item.code === code.toUpperCase()) ?? null;
+    return null;
   }
   const promotion = mapPromotion(data as JsonObject);
-  return promotion.isActive ? promotion : null;
+  const now = new Date().toISOString();
+  if (!isPromotionRedeemable(promotion, now)) return null;
+  return promotion;
+}
+
+/** Tăng current_uses khi đơn hàng đã tạo; trả false nếu mã vừa hết lượt (race) hoặc lỗi. */
+export async function consumePromotionUse(promotionId: string): Promise<boolean> {
+  const { data, error } = await withTimeout(
+    supabase.rpc('consume_promotion_if_available', { p_id: promotionId }),
+  );
+  if (error) {
+    debugLog('consume_promotion_if_available', error);
+    return false;
+  }
+  return data === true;
+}
+
+const PARTNER_IMAGES_BUCKET = 'partner-applications';
+
+function isRemoteHttpUri(uri: string): boolean {
+  const u = uri.trim().toLowerCase();
+  return u.startsWith('https://') || u.startsWith('http://');
+}
+
+function guessImageContentType(uri: string): string {
+  const lower = uri.toLowerCase();
+  if (lower.endsWith('.png')) return 'image/png';
+  if (lower.endsWith('.webp')) return 'image/webp';
+  if (lower.endsWith('.heic') || lower.endsWith('.heif')) return 'image/heic';
+  return 'image/jpeg';
+}
+
+function base64ToArrayBuffer(base64: string): ArrayBuffer {
+  const normalized = base64.replace(/\s/g, '');
+  if (typeof globalThis.atob === 'function') {
+    const binary = globalThis.atob(normalized);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes.buffer;
+  }
+  const AnyBuffer = (globalThis as unknown as { Buffer?: { from: (s: string, enc: string) => Uint8Array } })
+    .Buffer;
+  if (AnyBuffer?.from) {
+    const buf = AnyBuffer.from(normalized, 'base64');
+    return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+  }
+  throw new Error('partner-image-read-failed');
+}
+
+async function readLocalImageAsArrayBuffer(uri: string): Promise<{ data: ArrayBuffer; contentType: string }> {
+  // Fast path: fetch(file://...) works in some runtimes.
+  try {
+    const res = await fetch(uri);
+    if (res.ok) {
+      const arr = await res.arrayBuffer();
+      if (arr.byteLength > 0) {
+        const fromHeader = res.headers.get('content-type') ?? '';
+        const contentType = fromHeader.startsWith('image/') ? fromHeader : guessImageContentType(uri);
+        return { data: arr, contentType };
+      }
+    }
+  } catch {
+    // Fall back to FileSystem path below.
+  }
+
+  // Reliable path on iOS/Android: read base64 from local cache and decode.
+  const base64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
+  if (!base64) {
+    throw new Error('partner-image-read-failed');
+  }
+  const data = base64ToArrayBuffer(base64);
+  if (data.byteLength <= 0) {
+    throw new Error('partner-image-read-failed');
+  }
+  return { data, contentType: guessImageContentType(uri) };
+}
+
+/** Upload local gallery URIs to Storage; keep existing public URLs as-is. */
+async function uploadPartnerImagesToStorage(userId: string, uris: string[]): Promise<string[]> {
+  const out: string[] = [];
+  for (let i = 0; i < uris.length; i++) {
+    const uri = uris[i]?.trim();
+    if (!uri) continue;
+    if (isRemoteHttpUri(uri)) {
+      out.push(uri);
+      continue;
+    }
+    const objectPath = `${userId}/${Date.now()}-${i}-${Math.random().toString(36).slice(2, 10)}.jpg`;
+    const { data: fileData, contentType } = await readLocalImageAsArrayBuffer(uri);
+    const { error: upErr } = await supabase.storage
+      .from(PARTNER_IMAGES_BUCKET)
+      .upload(objectPath, fileData, { contentType, upsert: false });
+    if (upErr) {
+      throw upErr;
+    }
+    const { data: pub } = supabase.storage.from(PARTNER_IMAGES_BUCKET).getPublicUrl(objectPath);
+    out.push(pub.publicUrl);
+  }
+  return out;
+}
+
+/**
+ * Ensure therapist/profile gallery images are public HTTP URLs.
+ * Local `file://` URIs are uploaded to Storage and replaced with public URLs.
+ */
+export async function ensurePublicPartnerImageUris(userId: string, uris: string[]): Promise<string[]> {
+  const normalizedUserId = typeof userId === 'string' ? userId.trim() : '';
+  if (!normalizedUserId) {
+    throw new Error('missing-user-id');
+  }
+  const needsUpload =
+    Array.isArray(uris) &&
+    uris.some((u) => typeof u === 'string' && u.trim() && !isRemoteHttpUri(u));
+  if (needsUpload && !isSupabaseConfigured) {
+    throw new Error('missing-supabase-config');
+  }
+  if (!needsUpload) {
+    return uris.filter((u): u is string => typeof u === 'string' && !!u.trim()).map((u) => u.trim());
+  }
+  return uploadPartnerImagesToStorage(normalizedUserId, uris);
 }
 
 /**
  * PARTNER APPLICATIONS
  */
 export async function createPartnerApplication(payload: PartnerApplicationPayload): Promise<string> {
-  const uid = await getStoredUid();
+  const rawPayloadUid = typeof payload.userId === 'string' ? payload.userId.trim() : '';
+  let uid = rawPayloadUid;
+
+  if (!uid) {
+    uid = await getStoredUid();
+  }
+  if (!uid) {
+    const { data } = await supabase.auth.getUser();
+    uid = data.user?.id ?? '';
+  }
+  if (!uid) {
+    throw new Error('missing-user-id');
+  }
+
+  let payloadToSave: PartnerApplicationPayload = payload;
+  const imageUris = await ensurePublicPartnerImageUris(uid, payload.imageUris);
+  payloadToSave = { ...payload, imageUris };
+
   const { data, error } = await withTimeout(
     supabase
       .from('partner_applications')
@@ -937,7 +1749,7 @@ export async function createPartnerApplication(payload: PartnerApplicationPayloa
         status: 'pending',
         image_moderation_status: 'pending',
         reviewed_by_admin: false,
-        payload,
+        payload: payloadToSave,
       })
       .select('id')
       .single(),
@@ -946,6 +1758,103 @@ export async function createPartnerApplication(payload: PartnerApplicationPayloa
     throw error ?? new Error('create-partner-application-failed');
   }
   return String(data.id);
+}
+
+export async function completeTherapistBookingPayouts(
+  therapistUserId: string,
+  bookingId: string,
+  totalAmount: number,
+  /** Giữ tham số tương thích cũ; luồng mới luôn 100% thu nhập + 20% phí Ví Chi phí (RPC). */
+  _commissionRateUnused: number = 0.7,
+): Promise<{ transactionId: string; earningAmount: number; balance: number }> {
+  const amt = Math.round(Number(totalAmount));
+  if (!therapistUserId || !bookingId || amt <= 0) {
+    return { transactionId: '', earningAmount: 0, balance: 0 };
+  }
+  try {
+    const { data, error } = await withTimeout(
+      supabase.rpc('complete_therapist_booking_financials', {
+        p_therapist_user_id: therapistUserId,
+        p_booking_id: bookingId,
+        p_total_amount: amt,
+      }),
+    );
+    if (error) throw error;
+    const result = data as Record<string, unknown>;
+    if (result.skipped) {
+      return {
+        transactionId: String(result.transaction_id ?? ''),
+        earningAmount: 0,
+        balance: Number(result.balance ?? 0),
+      };
+    }
+    return {
+      transactionId: String(result.transaction_id ?? ''),
+      earningAmount: Number(result.earning_amount ?? 0),
+      balance: Number(result.balance ?? 0),
+    };
+  } catch {
+    // DB chưa migrate: vẫn cộng 100% vào ví chính (không có Ví Chi phí).
+    return creditTherapistEarning(therapistUserId, bookingId, totalAmount, 1);
+  }
+}
+
+/** Số dư Ví Chi phí (KTV) — có thể âm sau phí kết nối. */
+export async function getTherapistCostWalletBalance(userId: string): Promise<number> {
+  try {
+    const { data, error } = await withTimeout(
+      supabase.rpc('get_therapist_cost_wallet_balance', { p_user_id: userId }),
+    );
+    if (error) return 0;
+    return Number(data ?? 0);
+  } catch {
+    return 0;
+  }
+}
+
+/** Nạp tiền vào Ví Chi phí (đưa số dư về ≥ 0 để nhận đơn tiếp). */
+export async function therapistCostWalletTopUp(
+  userId: string,
+  amount: number,
+  method: string = 'payos',
+): Promise<{ transactionId: string; balance: number }> {
+  const { data, error } = await withTimeout(
+    supabase.rpc('therapist_cost_wallet_topup', {
+      p_user_id: userId,
+      p_amount: Math.round(Number(amount)),
+      p_method: method,
+    }),
+  );
+  if (error) throw error;
+  const result = data as Record<string, unknown>;
+  return {
+    transactionId: String(result.transaction_id ?? ''),
+    balance: Number(result.balance ?? 0),
+  };
+}
+
+/**
+ * Một lần nạp cho KTV: ưu tiên bù hết số dư âm ở ví phí, phần còn lại vào ví thu nhập.
+ * (Giao diện một ví; backend vẫn dùng 2 sổ tương thích migration hiện tại.)
+ */
+export async function therapistUnifiedWalletTopUp(
+  userId: string,
+  amount: number,
+  method: string = 'payos',
+): Promise<void> {
+  const amt = Math.round(Number(amount));
+  if (!userId || !Number.isFinite(amt) || amt <= 0) {
+    return;
+  }
+  const costBal = await getTherapistCostWalletBalance(userId);
+  const toCost = costBal < 0 ? Math.min(amt, -costBal) : 0;
+  const toMain = amt - toCost;
+  if (toCost > 0) {
+    await therapistCostWalletTopUp(userId, toCost, method);
+  }
+  if (toMain > 0) {
+    await walletTopUp(userId, toMain, method);
+  }
 }
 
 export async function getLatestPartnerApplicationByPhone(
@@ -1055,9 +1964,7 @@ export async function createNotification(notificationData: Omit<Notification, 'i
     throw error;
   }
 
-  // Send push notification to the user's device
   try {
-    const { sendPushToUser } = await import('@/contexts/NotificationContext');
     await sendPushToUser(
       notificationData.userId,
       notificationData.title,
@@ -1189,6 +2096,218 @@ export async function notifyNewJobForCity(
   );
 }
 
+export async function notifyAssignedTherapistJob(
+  therapistUserId: string,
+  bookingId: string,
+  customerName: string,
+  service: string,
+  date: string,
+  time: string,
+  address: string,
+): Promise<void> {
+  await createNotification({
+    userId: therapistUserId,
+    title: 'Khách đặt riêng bạn — cần phản hồi trong 15 phút',
+    titleEn: 'Personal booking — please respond within 15 minutes',
+    message: `Khách ${customerName} chọn bạn cho ${service} vào ${date} lúc ${time} tại ${address}. Chấp nhận hoặc Hủy trên màn Nhận việc.`,
+    messageEn: `${customerName} chose you for ${service} on ${date} at ${time} at ${address}. Accept or decline in Jobs.`,
+    type: 'job',
+    relatedId: bookingId,
+    isRead: false,
+    createdAt: new Date().toISOString(),
+  });
+}
+
+type JsonBookingPayload = Record<string, unknown>;
+
+async function readBookingPayload(bookingId: string): Promise<JsonBookingPayload | null> {
+  const { data, error } = await withTimeout(
+    supabase.from('bookings').select('payload').eq('id', bookingId).maybeSingle(),
+  );
+  if (error || !data || typeof data.payload !== 'object' || data.payload === null) {
+    return null;
+  }
+  return data.payload as JsonBookingPayload;
+}
+
+export async function therapistPrimaryAcceptBooking(
+  bookingId: string,
+  therapistUid: string,
+): Promise<{ ok: boolean; reason?: string }> {
+  const prev = await readBookingPayload(bookingId);
+  if (!prev) {
+    return { ok: false, reason: 'not_found' };
+  }
+  const requested = String(prev.requestedTherapistId ?? prev.therapistId ?? '');
+  if (requested !== therapistUid) {
+    return { ok: false, reason: 'not_target' };
+  }
+  const pa = String(prev.primaryAction ?? 'pending');
+  if (pa !== 'pending') {
+    return { ok: false, reason: 'already_responded' };
+  }
+  await mergeBookingPayload(
+    bookingId,
+    { primaryAction: 'accepted', broadcastClosed: true },
+    'confirmed',
+  );
+  const customerUserId = typeof prev.customerUserId === 'string' ? prev.customerUserId : '';
+  if (customerUserId) {
+    await createNotification({
+      userId: customerUserId,
+      title: 'Đã kết nối với kỹ thuật viên',
+      titleEn: 'Connected to your therapist',
+      message: `${String(prev.therapistName ?? 'KTV')} đã chấp nhận đơn của bạn. Vào chat để trao đổi.`,
+      messageEn: `${String(prev.therapistName ?? 'Therapist')} accepted your booking. Open chat to coordinate.`,
+      type: 'booking',
+      relatedId: bookingId,
+      isRead: false,
+      createdAt: new Date().toISOString(),
+    }).catch(() => {});
+  }
+  return { ok: true };
+}
+
+export async function therapistPrimaryDeclineBooking(
+  bookingId: string,
+  therapistUid: string,
+): Promise<{ ok: boolean; reason?: string }> {
+  const prev = await readBookingPayload(bookingId);
+  if (!prev) {
+    return { ok: false, reason: 'not_found' };
+  }
+  const requested = String(prev.requestedTherapistId ?? prev.therapistId ?? '');
+  if (requested !== therapistUid) {
+    return { ok: false, reason: 'not_target' };
+  }
+  if (String(prev.primaryAction ?? 'pending') !== 'pending') {
+    return { ok: false, reason: 'already_responded' };
+  }
+  await mergeBookingPayload(bookingId, { primaryAction: 'declined' });
+  const customerUserId = typeof prev.customerUserId === 'string' ? prev.customerUserId : '';
+  if (customerUserId) {
+    await createNotification({
+      userId: customerUserId,
+      title: 'KTV từ chối đơn',
+      titleEn: 'Therapist declined',
+      message: `${String(prev.therapistName ?? 'KTV')} đã hủy nhận đơn. Bạn có thể chọn KTV khác trong danh sách ứng tuyển hoặc gợi ý.`,
+      messageEn: `${String(prev.therapistName ?? 'Therapist')} declined. You can pick another therapist from applicants or suggestions.`,
+      type: 'booking',
+      relatedId: bookingId,
+      isRead: false,
+      createdAt: new Date().toISOString(),
+    }).catch(() => {});
+  }
+  return { ok: true };
+}
+
+export async function therapistApplyToBroadcastBooking(
+  bookingId: string,
+  therapistUid: string,
+  therapistName: string,
+  therapistAvatar?: string,
+): Promise<{ ok: boolean; reason?: string }> {
+  const prev = await readBookingPayload(bookingId);
+  if (!prev) {
+    return { ok: false, reason: 'not_found' };
+  }
+  if (String(prev.assignmentFlow ?? '') !== 'nominated_city_broadcast') {
+    return { ok: false, reason: 'not_broadcast' };
+  }
+  const requested = String(prev.requestedTherapistId ?? '');
+  if (requested === therapistUid) {
+    return { ok: false, reason: 'use_accept_decline' };
+  }
+  const rawApps = prev.applications;
+  const apps: JsonBookingPayload[] = Array.isArray(rawApps)
+    ? (rawApps as JsonBookingPayload[]).filter((x) => x && typeof x === 'object')
+    : [];
+  if (apps.some((a) => String(a.therapistId) === therapistUid)) {
+    return { ok: true };
+  }
+  apps.push({
+    therapistId: therapistUid,
+    therapistName,
+    therapistAvatar: therapistAvatar ?? '',
+    appliedAt: new Date().toISOString(),
+  });
+  await mergeBookingPayload(bookingId, { applications: apps });
+  const customerUserId = typeof prev.customerUserId === 'string' ? prev.customerUserId : '';
+  if (customerUserId) {
+    await createNotification({
+      userId: customerUserId,
+      title: 'Có KTV ứng tuyển',
+      titleEn: 'A therapist applied',
+      message: `${therapistName} muốn nhận đơn của bạn. Mở màn đặt lịch để chọn.`,
+      messageEn: `${therapistName} applied for your booking. Open your booking screen to choose.`,
+      type: 'job',
+      relatedId: bookingId,
+      isRead: false,
+      createdAt: new Date().toISOString(),
+    }).catch(() => {});
+  }
+  return { ok: true };
+}
+
+export async function therapistSkipBroadcastBooking(
+  bookingId: string,
+  therapistUid: string,
+): Promise<void> {
+  const prev = await readBookingPayload(bookingId);
+  if (!prev) {
+    return;
+  }
+  const raw = prev.skippedTherapistIds;
+  const skipped: string[] = Array.isArray(raw)
+    ? (raw as unknown[]).filter((x): x is string => typeof x === 'string')
+    : [];
+  if (!skipped.includes(therapistUid)) {
+    skipped.push(therapistUid);
+  }
+  await mergeBookingPayload(bookingId, { skippedTherapistIds: skipped });
+}
+
+export async function notifyCustomerPrimaryWindowElapsed(
+  customerUserId: string,
+  bookingId: string,
+  applicantCount: number,
+): Promise<void> {
+  await createNotification({
+    userId: customerUserId,
+    title: 'Hết thời gian chờ KTV bạn chọn',
+    titleEn: 'Waiting window ended',
+    message:
+      applicantCount > 0
+        ? `Có ${applicantCount} KTV đã ứng tuyển. Mở đơn để chọn KTV phù hợp.`
+        : 'Chưa có KTV ứng tuyển. Xem gợi ý KTV gần bạn trên màn hình đặt lịch.',
+    messageEn:
+      applicantCount > 0
+        ? `${applicantCount} therapist(s) applied. Open your booking to choose.`
+        : 'No applications yet. See nearby suggestions on your booking screen.',
+    type: 'job',
+    relatedId: bookingId,
+    isRead: false,
+    createdAt: new Date().toISOString(),
+  });
+}
+
+export async function notifyCustomerNoApplicantsYet(
+  customerUserId: string,
+  bookingId: string,
+): Promise<void> {
+  await createNotification({
+    userId: customerUserId,
+    title: 'Gợi ý KTV gần bạn',
+    titleEn: 'Nearby therapist suggestions',
+    message: 'Sau 5 phút chưa có KTV ứng tuyển. Ứng dụng đang gợi ý KTV đang rảnh gần vị trí của bạn.',
+    messageEn: 'After 5 minutes with no applications, we are showing nearby available therapists.',
+    type: 'job',
+    relatedId: bookingId,
+    isRead: false,
+    createdAt: new Date().toISOString(),
+  });
+}
+
 /** Send promotion notification to a user */
 export async function notifyPromotion(
   userId: string,
@@ -1227,6 +2346,8 @@ export async function getUserProfileByPhone(phoneNumber: string): Promise<Record
     email: data.email ?? undefined,
     phoneNumber: data.phone_number ?? '',
     displayName: data.display_name,
+    bio: data.bio ?? '',
+    age: typeof data.age === 'number' ? data.age : Number(data.age ?? 0) || undefined,
     gender: data.gender,
     nationality: data.nationality,
     avatarUri: data.avatar_uri,
@@ -1278,6 +2399,8 @@ function mapProfileRow(data: Record<string, unknown>): Record<string, unknown> {
     email: data.email ?? undefined,
     phoneNumber: data.phone_number ?? '',
     displayName: data.display_name,
+    bio: data.bio ?? '',
+    age: typeof data.age === 'number' ? data.age : Number(data.age ?? 0) || undefined,
     gender: data.gender,
     nationality: data.nationality,
     avatarUri: data.avatar_uri,
@@ -1298,6 +2421,16 @@ function mapProfileRow(data: Record<string, unknown>): Record<string, unknown> {
   };
 }
 
+/**
+ * Enum user_role trên một số DB chỉ có customer|therapist (thiếu migration ADD admin).
+ * Không gửi role admin vào profiles.role — UI admin cho ADMIN_PHONE vẫn nhờ toAuthUserData sau khi đọc profile.
+ */
+function persistableProfilesRole(role: string): string {
+  const r = String(role || 'customer').toLowerCase();
+  if (r === 'therapist') return 'therapist';
+  return 'customer';
+}
+
 export async function upsertUserProfile(profile: Record<string, unknown>): Promise<void> {
   const uid = String(profile.authUid ?? '');
   const email = typeof profile.email === 'string' ? profile.email.trim().toLowerCase() : null;
@@ -1312,10 +2445,12 @@ export async function upsertUserProfile(profile: Record<string, unknown>): Promi
     id: uid,
     phone_number: phone || null,
     display_name: String(profile.displayName ?? ''),
+    bio: normalizeVietnameseText(String(profile.bio ?? ''), 240),
+    age: Number.isFinite(Number(profile.age)) ? Number(profile.age) : null,
     gender: profile.gender ?? null,
     nationality: profile.nationality ?? null,
     avatar_uri: profile.avatarUri ?? null,
-    role: String(profile.role ?? 'customer'),
+    role: persistableProfilesRole(String(profile.role ?? 'customer')),
     working_city: profile.workingCity ?? null,
     service_images: Array.isArray(profile.serviceImages) ? profile.serviceImages : [],
     services: Array.isArray(profile.services) ? profile.services : [],
@@ -1335,25 +2470,64 @@ export async function upsertUserProfile(profile: Record<string, unknown>): Promi
     payload.email = email;
   }
 
+  // JSON sạch (bỏ undefined) — PostgREST/JSONB ổn định hơn với object thuần JSON
+  let pData = sanitizeProfilePayloadForRpc(
+    JSON.parse(JSON.stringify(payload)) as Record<string, unknown>,
+  );
+
   // Try RPC first (SECURITY DEFINER, bypasses RLS)
   const { error: rpcError } = await withTimeout(
-    supabase.rpc('upsert_profile', { p_data: payload }),
+    supabase.rpc('upsert_profile', { p_data: pData }),
   );
 
   if (!rpcError) {
     return;
   }
 
-  // Fallback to direct upsert if RPC not available
-  console.warn('[upsertUserProfile] RPC failed, trying direct upsert:', rpcError.message);
-  const { error } = await withTimeout(
-    supabase.from('profiles').upsert(payload, {
-      onConflict: 'id',
-    }),
-  );
-  if (error) {
-    throw error;
+  console.warn('[upsertUserProfile] RPC upsert_profile failed:', formatSupabaseError(rpcError));
+
+  const rpcMissing = extractMissingColumnFromSupabaseError(rpcError);
+  if (rpcMissing && Object.prototype.hasOwnProperty.call(pData, rpcMissing)) {
+    const { [rpcMissing]: _, ...rest } = pData;
+    pData = sanitizeProfilePayloadForRpc(
+      JSON.parse(JSON.stringify(rest)) as Record<string, unknown>,
+    );
+    debugLog('upsertUserProfile', `RPC failed (missing column ${rpcMissing}); retrying without it + REST`, {
+      message: (rpcError as { message?: string }).message,
+    });
+  } else {
+    debugLog('upsertUserProfile', 'RPC upsert_profile failed, using REST fallback', {
+      message: (rpcError as { message?: string }).message,
+      details: (rpcError as { details?: string }).details,
+    });
   }
+
+  // Fallback: REST upsert — body không gồm cột thiếu (PostgREST không cần cột DB nếu không gửi).
+  // Lặp và bỏ dần cột khi schema cũ thiếu nhiều field.
+  let tableRow: Record<string, unknown> = { ...pData };
+  let lastRestErr: unknown = null;
+  for (let attempt = 0; attempt < 24; attempt += 1) {
+    const { error: restErr } = await withTimeout(
+      supabase.from('profiles').upsert(tableRow, {
+        onConflict: 'id',
+      }),
+    );
+    if (!restErr) {
+      return;
+    }
+    lastRestErr = restErr;
+    console.warn('[upsertUserProfile] REST profiles upsert failed:', formatSupabaseError(restErr));
+    const missing = extractMissingColumnFromSupabaseError(restErr);
+    if (missing && Object.prototype.hasOwnProperty.call(tableRow, missing)) {
+      const { [missing]: _, ...rest } = tableRow;
+      tableRow = rest;
+      continue;
+    }
+    throw new Error(`upsertUserProfile: ${formatSupabaseError(restErr)}`);
+  }
+  throw new Error(
+    `upsertUserProfile: exceeded retries — ${formatSupabaseError(lastRestErr)}`,
+  );
 }
 
 /**
@@ -1378,17 +2552,10 @@ export type WalletTransaction = {
   createdAt: string;
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Test wallet store (in-memory)
-// ─────────────────────────────────────────────────────────────────────────────
-const testWallets: Record<string, { id: string; balance: number }> = {};
-let testWalletTxCounter = 1;
-const testWalletTransactions: WalletTransaction[] = [];
-
 /**
  * USER ROLE MANAGEMENT
  */
-export async function updateUserRole(userId: string, role: 'customer' | 'therapist'): Promise<void> {
+export async function updateUserRole(userId: string, role: 'customer' | 'therapist' | 'admin'): Promise<void> {
   const { error } = await withTimeout(
     supabase.rpc('update_user_role', { p_user_id: userId, p_role: role }),
   );
@@ -1408,13 +2575,6 @@ export async function getUserRole(userId: string): Promise<string | null> {
 }
 
 export async function getOrCreateWallet(userId: string): Promise<WalletData> {
-  if (IS_TEST_MODE) {
-    if (!testWallets[userId]) {
-      // Big enough to cover booking/upsell testing.
-      testWallets[userId] = { id: `test-wallet-${userId}`, balance: 1_000_000 };
-    }
-    return { id: testWallets[userId].id, userId, balance: testWallets[userId].balance };
-  }
   try {
     const { data, error } = await withTimeout(
       supabase.rpc('get_or_create_wallet', { p_user_id: userId }),
@@ -1440,28 +2600,32 @@ export async function getOrCreateWallet(userId: string): Promise<WalletData> {
 }
 
 export async function walletTopUp(userId: string, amount: number, method: string = 'bank'): Promise<{ transactionId: string; balance: number }> {
-  if (IS_TEST_MODE) {
-    const w = testWallets[userId] ?? { id: `test-wallet-${userId}`, balance: 1_000_000 };
-    const next = w.balance + amount;
-    testWallets[userId] = { ...w, balance: next };
-    const tx: WalletTransaction = {
-      id: `test-tx-${testWalletTxCounter}`,
-      walletId: w.id,
-      userId,
-      type: 'topup',
-      amount,
-      balanceAfter: next,
-      description: `Top up (${method})`,
-      referenceId: null,
-      status: 'completed',
-      createdAt: new Date().toISOString(),
-    } as WalletTransaction;
-    testWalletTransactions.unshift(tx);
-    testWalletTxCounter += 1;
-    return { transactionId: tx.id, balance: next };
-  }
   const { data, error } = await withTimeout(
     supabase.rpc('wallet_topup', { p_user_id: userId, p_amount: amount, p_method: method }),
+  );
+  if (error) throw error;
+  const result = data as Record<string, unknown>;
+  return {
+    transactionId: String(result.transaction_id),
+    balance: Number(result.balance),
+  };
+}
+
+/** Hoàn tiền vào ví (type refund). `referenceId` trùng với lần hoàn trước sẽ không cộng thêm tiền. */
+export async function walletRefund(
+  userId: string,
+  amount: number,
+  description: string = '',
+  referenceId: string | null = null,
+): Promise<{ transactionId: string; balance: number }> {
+  const amt = Math.round(Number(amount));
+  const { data, error } = await withTimeout(
+    supabase.rpc('wallet_refund', {
+      p_user_id: userId,
+      p_amount: amt,
+      p_description: description,
+      p_reference_id: referenceId,
+    }),
   );
   if (error) throw error;
   const result = data as Record<string, unknown>;
@@ -1478,27 +2642,6 @@ export async function walletDeduct(
   description: string = '',
   referenceId: string | null = null,
 ): Promise<{ transactionId: string; balance: number }> {
-  if (IS_TEST_MODE) {
-    const w = testWallets[userId] ?? { id: `test-wallet-${userId}`, balance: 1_000_000 };
-    const next = w.balance - amount;
-    testWallets[userId] = { ...w, balance: next };
-    const txType = (type as WalletTransaction['type']) ?? 'payment';
-    const tx: WalletTransaction = {
-      id: `test-tx-${testWalletTxCounter}`,
-      walletId: w.id,
-      userId,
-      type: txType,
-      amount,
-      balanceAfter: next,
-      description,
-      referenceId,
-      status: 'completed',
-      createdAt: new Date().toISOString(),
-    } as WalletTransaction;
-    testWalletTransactions.unshift(tx);
-    testWalletTxCounter += 1;
-    return { transactionId: tx.id, balance: next };
-  }
   const { data, error } = await withTimeout(
     supabase.rpc('wallet_deduct', {
       p_user_id: userId,
@@ -1517,10 +2660,6 @@ export async function walletDeduct(
 }
 
 export async function getWalletTransactions(userId: string, limit = 50, offset = 0): Promise<WalletTransaction[]> {
-  if (IS_TEST_MODE) {
-    const all = testWalletTransactions.filter((t) => t.userId === userId);
-    return all.slice(offset, offset + limit);
-  }
   const { data, error } = await withTimeout(
     supabase.rpc('get_wallet_transactions', { p_user_id: userId, p_limit: limit, p_offset: offset }),
   );
@@ -1645,9 +2784,6 @@ export async function checkTherapistMinBalance(userId: string, minBalance: numbe
  * THERAPIST SHIFTS
  */
 
-const testTherapistShifts: Record<string, Record<string, string[]>> = {};
-const testTherapistAvailability: Record<string, boolean> = {};
-
 function iterateDateRange(fromDate: string, toDate: string): string[] {
   const out: string[] = [];
   const start = new Date(`${fromDate}T00:00:00.000Z`);
@@ -1670,11 +2806,6 @@ export async function saveTherapistShifts(
   slots: string[],
   userName: string = '',
 ): Promise<void> {
-  if (IS_TEST_MODE) {
-    testTherapistShifts[userId] = testTherapistShifts[userId] ?? {};
-    testTherapistShifts[userId][shiftDate] = [...slots];
-    return;
-  }
   const { error } = await withTimeout(
     supabase.rpc('upsert_therapist_shifts', {
       p_user_id: userId,
@@ -1702,14 +2833,9 @@ export async function getTherapistShifts(
   fromDate: string,
   toDate: string,
 ): Promise<TherapistShiftData[]> {
-  if (IS_TEST_MODE) {
-    const dates = iterateDateRange(fromDate, toDate);
-    const defaultSlotsA = ['08h - 10h', '10h - 12h', '12h - 14h'];
-    const defaultSlotsB = ['14h - 16h', '16h - 18h'];
-    return dates.map((d, idx) => ({
-      shiftDate: d,
-      slots: testTherapistShifts[userId]?.[d] ?? (idx % 2 === 0 ? defaultSlotsA : defaultSlotsB),
-    }));
+  const virtualShifts = getVirtualTherapistShifts(userId, fromDate, toDate);
+  if (virtualShifts) {
+    return virtualShifts;
   }
   const { data, error } = await withTimeout(
     supabase.rpc('get_therapist_shifts', {
@@ -1745,32 +2871,34 @@ export async function getTherapistShifts(
 export async function getTherapistShiftsForDate(
   date: string,
 ): Promise<{ userId: string; slots: string[] }[]> {
-  if (IS_TEST_MODE) {
-    return Object.keys(testTherapistShifts)
-      .filter((uid) => Array.isArray(testTherapistShifts[uid]?.[date]))
-      .map((uid) => ({ userId: uid, slots: testTherapistShifts[uid][date] }));
+  const mapRows = (rows: Record<string, unknown>[]) =>
+    rows.map((r) => ({
+      userId: String(r.user_id ?? ''),
+      slots: Array.isArray(r.slots) ? (r.slots as string[]) : [],
+    }));
+
+  try {
+    const { data, error } = await withTimeout(
+      supabase.rpc('list_therapist_shifts_for_date', { p_shift_date: date }),
+    );
+    if (!error && Array.isArray(data)) {
+      return mapRows(data as Record<string, unknown>[]);
+    }
+  } catch {
+    /* RPC chưa deploy — đọc bảng trực tiếp */
   }
+
   const { data, error } = await withTimeout(
-    supabase
-      .from('therapist_shifts')
-      .select('user_id, slots')
-      .eq('shift_date', date),
+    supabase.from('therapist_shifts').select('user_id, slots').eq('shift_date', date),
   );
   if (error || !data) return [];
-  return (data as Record<string, unknown>[]).map((r) => ({
-    userId: String(r.user_id),
-    slots: (r.slots as string[]) || [],
-  }));
+  return mapRows(data as Record<string, unknown>[]);
 }
 
 export async function updateTherapistAvailability(
   userId: string,
   isAvailable: boolean,
 ): Promise<void> {
-  if (IS_TEST_MODE) {
-    testTherapistAvailability[userId] = isAvailable;
-    return;
-  }
   const { error } = await withTimeout(
     supabase
       .from('therapists')
@@ -1783,9 +2911,6 @@ export async function updateTherapistAvailability(
 export async function getTherapistAvailability(
   userId: string,
 ): Promise<boolean> {
-  if (IS_TEST_MODE) {
-    return testTherapistAvailability[userId] ?? true;
-  }
   const { data, error } = await withTimeout(
     supabase
       .from('therapists')
@@ -1817,7 +2942,7 @@ export interface ChatMessage {
   id: string;
   roomId: string;
   senderId: string;
-  senderRole: 'customer' | 'therapist' | 'system';
+  senderRole: 'customer' | 'therapist' | 'system' | 'admin';
   content: string;
   messageType: 'text' | 'image' | 'location' | 'system';
   isRead: boolean;
@@ -1858,6 +2983,36 @@ function mapChatMessage(row: Record<string, unknown>): ChatMessage {
   };
 }
 
+/**
+ * Cùng phòng với admin web (admin_get_or_create_therapist_chat_room): KTV ↔ admin.
+ * Cần EXPO_PUBLIC_ADMIN_USER_ID trùng NEXT_PUBLIC_ADMIN_USER_ID trên admin panel.
+ */
+export async function getOrCreateTherapistAdminChatRoom(
+  therapistId: string,
+  therapistName: string,
+): Promise<string> {
+  const adminId = getExpoAdminUserId();
+  const adminName = getExpoAdminDisplayName();
+  if (!adminId) {
+    throw new Error('missing_admin_env');
+  }
+  const { data, error } = await withTimeout(
+    supabase.rpc('admin_get_or_create_therapist_chat_room', {
+      p_admin_id: adminId,
+      p_admin_name: adminName,
+      p_therapist_id: therapistId,
+      p_therapist_name: therapistName || 'KTV',
+    }),
+  );
+  if (error) {
+    throw error;
+  }
+  if (data == null) {
+    throw new Error('no_room_id');
+  }
+  return String(data);
+}
+
 /** Get or create a chat room for a specific booking */
 export async function getOrCreateChatRoom(
   bookingId: string,
@@ -1866,27 +3021,6 @@ export async function getOrCreateChatRoom(
   customerName: string = '',
   therapistName: string = '',
 ): Promise<string> {
-  if (IS_TEST_MODE) {
-    const existing = testChatRooms.find(
-      (r) => r.bookingId === bookingId && r.customerId === customerId && r.therapistId === therapistId,
-    );
-    if (existing) return existing.id;
-
-    const now = new Date().toISOString();
-    const room: ChatRoom = {
-      id: makeTestRoomId(),
-      bookingId,
-      customerId,
-      therapistId,
-      customerName,
-      therapistName,
-      isActive: true,
-      createdAt: now,
-      updatedAt: now,
-    };
-    testChatRooms.unshift(room);
-    return room.id;
-  }
   const { data, error } = await withTimeout(
     supabase.rpc('get_or_create_chat_room', {
       p_booking_id: bookingId,
@@ -1902,9 +3036,6 @@ export async function getOrCreateChatRoom(
 
 /** Get an existing chat room by booking ID */
 export async function getChatRoomByBooking(bookingId: string): Promise<ChatRoom | null> {
-  if (IS_TEST_MODE) {
-    return testChatRooms.find((r) => r.bookingId === bookingId) ?? null;
-  }
   const { data, error } = await withTimeout(
     supabase
       .from('chat_rooms')
@@ -1918,12 +3049,6 @@ export async function getChatRoomByBooking(bookingId: string): Promise<ChatRoom 
 
 /** Get all chat rooms for a user (customer or therapist) */
 export async function getChatRoomsForUser(userId: string): Promise<ChatRoom[]> {
-  if (IS_TEST_MODE) {
-    return testChatRooms
-      .filter((r) => r.customerId === userId || r.therapistId === userId)
-      .slice()
-      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
-  }
   const { data, error } = await withTimeout(
     supabase
       .from('chat_rooms')
@@ -1939,35 +3064,10 @@ export async function getChatRoomsForUser(userId: string): Promise<ChatRoom[]> {
 export async function sendChatMessage(
   roomId: string,
   senderId: string,
-  senderRole: 'customer' | 'therapist' | 'system',
+  senderRole: 'customer' | 'therapist' | 'system' | 'admin',
   content: string,
   messageType: 'text' | 'image' | 'location' | 'system' = 'text',
 ): Promise<string> {
-  if (IS_TEST_MODE) {
-    const now = new Date().toISOString();
-    const msg: ChatMessage = {
-      id: `test-msg-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-      roomId,
-      senderId,
-      senderRole,
-      content,
-      messageType,
-      isRead: false,
-      createdAt: now,
-    };
-
-    testChatMessages.push(msg);
-
-    const room = testChatRooms.find((r) => r.id === roomId);
-    if (room) room.updatedAt = now;
-
-    const listeners = testChatListeners[roomId];
-    if (listeners) {
-      for (const cb of listeners) cb(msg);
-    }
-
-    return msg.id;
-  }
   const { data, error } = await withTimeout(
     supabase.rpc('send_chat_message', {
       p_room_id: roomId,
@@ -1987,13 +3087,6 @@ export async function getChatMessages(
   limit: number = 100,
   offset: number = 0,
 ): Promise<ChatMessage[]> {
-  if (IS_TEST_MODE) {
-    const all = testChatMessages
-      .filter((m) => m.roomId === roomId)
-      .slice()
-      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
-    return all.slice(offset, offset + limit);
-  }
   const { data, error } = await withTimeout(
     supabase
       .from('chat_messages')
@@ -2008,14 +3101,6 @@ export async function getChatMessages(
 
 /** Mark all unread messages in a room as read for a user */
 export async function markChatMessagesRead(roomId: string, readerId: string): Promise<void> {
-  if (IS_TEST_MODE) {
-    for (const m of testChatMessages) {
-      if (m.roomId === roomId && !m.isRead && m.senderId !== readerId) {
-        m.isRead = true;
-      }
-    }
-    return;
-  }
   const { error } = await withTimeout(
     supabase.rpc('mark_messages_read', {
       p_room_id: roomId,
@@ -2030,13 +3115,6 @@ export function subscribeToChatMessages(
   roomId: string,
   onNewMessage: (msg: ChatMessage) => void,
 ) {
-  if (IS_TEST_MODE) {
-    if (!testChatListeners[roomId]) testChatListeners[roomId] = new Set();
-    testChatListeners[roomId].add(onNewMessage);
-    return () => {
-      testChatListeners[roomId]?.delete(onNewMessage);
-    };
-  }
   const channel = supabase
     .channel(`chat:${roomId}`)
     .on(
@@ -2056,6 +3134,15 @@ export function subscribeToChatMessages(
   return () => {
     supabase.removeChannel(channel);
   };
+}
+
+export async function deleteChatRoomByBooking(bookingId: string): Promise<void> {
+  const { error } = await withTimeout(
+    supabase.from('chat_rooms').delete().eq('booking_id', bookingId),
+  );
+  if (error) {
+    throw error;
+  }
 }
 
 // ── Admin Chat Management ──────────────────────────────────
@@ -2098,5 +3185,50 @@ export async function adminToggleChatRoom(roomId: string, isActive: boolean): Pr
     }),
   );
   if (error) throw error;
+}
+
+// ── Account deletion (see supabase/migrations/012_account_deletion.sql) ──
+
+/** True when current Supabase Auth session is Google/Apple OAuth (delete via delete_my_oauth_account). */
+export async function accountDeletionUsesOAuthSession(authUid: string): Promise<boolean> {
+  const { data, error } = await supabase.auth.getUser();
+  if (error || !data.user?.id || data.user.id !== authUid) {
+    return false;
+  }
+  const providers = new Set((data.user.identities ?? []).map((i) => i.provider));
+  return providers.has('google') || providers.has('apple');
+}
+
+export async function deleteUserAccountOnServer(
+  user: { authUid?: string; phoneNumber?: string },
+  password?: string,
+): Promise<void> {
+  const uid = user.authUid?.trim();
+  if (!uid) {
+    throw new Error('missing_auth');
+  }
+
+  const oauth = await accountDeletionUsesOAuthSession(uid);
+  if (oauth) {
+    const { error } = await withAuthTimeout(supabase.rpc('delete_my_oauth_account'));
+    if (error) throw new Error(error.message);
+    await supabase.auth.signOut();
+    return;
+  }
+
+  const phone = user.phoneNumber?.trim();
+  if (!phone || !password?.trim()) {
+    throw new Error('invalid_credentials');
+  }
+
+  const { error } = await withAuthTimeout(
+    supabase.rpc('delete_my_phone_account', {
+      p_phone: phone,
+      p_password: password,
+    }),
+  );
+  if (error) throw new Error(error.message);
+  await AsyncStorage.removeItem('custom_auth_uid');
+  await AsyncStorage.removeItem('cached_user_profile');
 }
 

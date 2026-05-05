@@ -75,13 +75,6 @@ export async function signInWithGoogleOAuthBrowser(): Promise<{
   return { error: new Error('No code or tokens in OAuth callback URL'), cancelled: false };
 }
 
-export async function signInWithGoogleIdToken(idToken: string) {
-  return supabase.auth.signInWithIdToken({
-    provider: 'google',
-    token: idToken,
-  });
-}
-
 export async function signInWithAppleIdentityToken(identityToken: string) {
   return supabase.auth.signInWithIdToken({
     provider: 'apple',
@@ -102,15 +95,19 @@ export async function finalizeOAuthUserProfile(): Promise<UserData | null> {
       (typeof meta?.name === 'string' && meta.name) ||
       '';
     const displayName = nameFromMeta || (u.email?.split('@')[0] ?? 'User');
-    await upsertUserProfile({
-      authUid: u.id,
-      email: u.email ?? undefined,
-      phoneNumber: '',
-      displayName,
-      createdAt: new Date().toISOString(),
-      role: 'customer',
-      partnerApplicationStatus: 'none',
-    });
+    try {
+      await upsertUserProfile({
+        authUid: u.id,
+        email: u.email ?? undefined,
+        phoneNumber: '',
+        displayName,
+        createdAt: new Date().toISOString(),
+        role: 'customer',
+        partnerApplicationStatus: 'none',
+      });
+    } catch (e) {
+      console.warn('[finalizeOAuthUserProfile] upsertUserProfile failed:', e);
+    }
     profile = await getUserProfileByUid(u.id);
   }
   if (!profile) return null;

@@ -18,11 +18,18 @@ export function useTabletLayout(): TabletLayout {
     return {
       isTablet,
       horizontalPadding,
-      contentContainer: {
-        width: '100%',
-        maxWidth: isTablet ? 980 : '100%',
-        alignSelf: 'center',
-      },
+      contentContainer: isTablet
+        ? {
+            width: '100%',
+            maxWidth: 1040,
+            alignSelf: 'center',
+          }
+        : {
+            width: '100%',
+            maxWidth: '100%',
+            alignSelf: 'stretch',
+            flex: 1,
+          },
     };
   }, [height, width]);
 }

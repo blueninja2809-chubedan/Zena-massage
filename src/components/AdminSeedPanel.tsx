@@ -55,8 +55,8 @@ export default function AdminSeedPanel() {
 
             <Text style={styles.description}>
               {language === 'vi'
-                ? 'Nhấn nút dưới để tự động thêm services, therapists, promotions vào database'
-                : 'Click the button below to automatically add services, therapists, and promotions to database'}
+                ? 'Nhấn nút dưới để tự động thêm dịch vụ và kỹ thuật viên mẫu vào database (không gồm mã khuyến mãi — tạo mã trong admin).'
+                : 'Click below to add sample services and therapists (promo codes are managed in admin only).'}
             </Text>
 
             {/* Seed Button */}

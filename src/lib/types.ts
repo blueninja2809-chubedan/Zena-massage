@@ -1,5 +1,5 @@
 /**
- * Data Models and Types for GLOW Massage Booking App
+ * Data Models and Types for Zena Massage Booking App
  */
 
 // SERVICE MODELS
@@ -37,6 +37,9 @@ export interface Therapist {
   reviewCount: number;
   hourlyRate: number;
   distanceFromCenter: number; // in km
+  currentLatitude?: number;
+  currentLongitude?: number;
+  locationUpdatedAt?: string;
   workingCity?: string;
   isAvailable: boolean;
   availability: Record<string, string[]>; // day -> [time slots]

@@ -1,7 +1,9 @@
+import { AppColors } from '@/constants/appColors';
 import { useActiveBooking } from '@/contexts/ActiveBookingContext';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useUser } from '@/contexts/UserContext';
 import {
+    getBookingById,
     type ChatMessage,
     type ChatRoom,
     getChatMessages,
@@ -26,7 +28,6 @@ import {
     TouchableOpacity,
     View,
 } from 'react-native';
-import { AppColors } from '@/constants/appColors';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 const translations = {
@@ -61,19 +62,16 @@ const COLORS = {
 export default function ChatScreen({ onClose, bookingId }: { onClose: () => void; bookingId?: string }) {
   const { language } = useLanguage();
   const strings = translations[language as keyof typeof translations] || translations.vi;
-  const { activeBooking } = useActiveBooking();
+  const { activeBooking, clearActiveBooking } = useActiveBooking();
   const { user } = useUser();
   const [chatRooms, setChatRooms] = useState<ChatRoom[]>([]);
   const [selectedRoom, setSelectedRoom] = useState<ChatRoom | null>(null);
   const [loadingRooms, setLoadingRooms] = useState(false);
+  const [bookingChatStatus, setBookingChatStatus] = useState<'ready' | 'pending' | 'done' | null>(null);
+  const [bookingTherapistName, setBookingTherapistName] = useState('');
 
-  const isTestMode =
-    process.env.EXPO_PUBLIC_TEST_MODE === 'true' ||
-    process.env.EXPO_PUBLIC_TEST_MODE === '1' ||
-    // eslint-disable-next-line no-undef
-    (typeof __DEV__ !== 'undefined' && __DEV__);
 
-  const userId = user?.authUid || user?.phoneNumber || (isTestMode ? 'test-user' : '');
+  const userId = user?.authUid || user?.phoneNumber || '';
 
   // If a specific bookingId is provided, open that chat directly
   useEffect(() => {
@@ -82,11 +80,46 @@ export default function ChatScreen({ onClose, bookingId }: { onClose: () => void
       // Look for existing room for this booking
       (async () => {
         try {
+          const booking = await getBookingById(bookingId);
+          const bookingStatus = String(booking?.status ?? '');
+          const therapistName = typeof booking?.therapistName === 'string' ? booking.therapistName : '';
+          setBookingTherapistName(therapistName);
+
+          if (bookingStatus === 'completed' || bookingStatus === 'cancelled') {
+            setBookingChatStatus('done');
+            setChatRooms([]);
+            setSelectedRoom(null);
+            return;
+          }
+
+          if (bookingStatus !== 'confirmed' && bookingStatus !== 'in-progress') {
+            setBookingChatStatus('pending');
+            setChatRooms([]);
+            setSelectedRoom(null);
+            return;
+          }
+
           const room = userId ? (await getChatRoomsForUser(userId)).find((r) => r.bookingId === bookingId) : null;
-          const resolvedRoom = room ?? (await getChatRoomByBooking(bookingId));
+          let resolvedRoom = room ?? (await getChatRoomByBooking(bookingId));
+          if (!resolvedRoom && booking) {
+            const customerId = String(booking.customerUserId ?? booking.userId ?? userId ?? '');
+            const therapistId = String(booking.therapistId ?? '');
+            if (customerId && therapistId) {
+              await getOrCreateChatRoom(
+                bookingId,
+                customerId,
+                therapistId,
+                String(booking.customerName ?? ''),
+                therapistName,
+              );
+              resolvedRoom = await getChatRoomByBooking(bookingId);
+            }
+          }
+          setBookingChatStatus(resolvedRoom ? 'ready' : 'pending');
           if (resolvedRoom) setSelectedRoom(resolvedRoom);
           setChatRooms(resolvedRoom ? [resolvedRoom] : []);
         } catch {
+          setBookingChatStatus('pending');
           setChatRooms([]);
         } finally {
           setLoadingRooms(false);
@@ -95,6 +128,49 @@ export default function ChatScreen({ onClose, bookingId }: { onClose: () => void
       return;
     }
   }, [bookingId, userId]);
+
+  useEffect(() => {
+    const targetBookingId = bookingId || selectedRoom?.bookingId || activeBooking?.bookingId;
+    if (!targetBookingId) return;
+
+    let cancelled = false;
+    const syncBookingStatus = async () => {
+      try {
+        const booking = await getBookingById(targetBookingId);
+        const status = String(booking?.status ?? '');
+        if (cancelled || !status) return;
+
+        if (status === 'completed' || status === 'cancelled') {
+          clearActiveBooking();
+          setSelectedRoom((prev) => (prev?.bookingId === targetBookingId ? null : prev));
+          setChatRooms((prev) => prev.filter((room) => room.bookingId !== targetBookingId));
+          setBookingChatStatus('done');
+          if (bookingId) {
+            onClose();
+          }
+          return;
+        }
+
+        if (status === 'confirmed' || status === 'in-progress') {
+          setBookingChatStatus('ready');
+        } else if (bookingId) {
+          setBookingChatStatus('pending');
+        }
+      } catch {
+        // Best-effort sync only.
+      }
+    };
+
+    void syncBookingStatus();
+    const intervalId = setInterval(() => {
+      void syncBookingStatus();
+    }, 5000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+    };
+  }, [activeBooking?.bookingId, bookingId, clearActiveBooking, onClose, selectedRoom?.bookingId]);
 
   // Load user's chat room list
   useEffect(() => {
@@ -121,6 +197,58 @@ export default function ChatScreen({ onClose, bookingId }: { onClose: () => void
         }}
         language={language}
       />
+    );
+  }
+
+  if (bookingId && bookingChatStatus === 'pending') {
+    return (
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <StatusBar barStyle="dark-content" backgroundColor={COLORS.bg} />
+        <View style={styles.header}>
+          <TouchableOpacity style={styles.backBtn} onPress={onClose}>
+            <Text style={styles.backIcon}>←</Text>
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>{strings.title}</Text>
+          <View style={{ width: 38 }} />
+        </View>
+        <View style={styles.emptyContainer}>
+          <Text style={styles.emptyEmoji}>⏳</Text>
+          <Text style={styles.emptyTitle}>
+            {language === 'en' ? 'Waiting for therapist confirmation' : 'Đang chờ kỹ thuật viên xác nhận'}
+          </Text>
+          <Text style={styles.emptyDesc}>
+            {language === 'en'
+              ? `Chat will open after ${bookingTherapistName || 'the therapist'} confirms the booking.`
+              : `Chat sẽ được mở sau khi ${bookingTherapistName || 'kỹ thuật viên'} xác nhận đơn.`}
+          </Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (bookingId && bookingChatStatus === 'done') {
+    return (
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <StatusBar barStyle="dark-content" backgroundColor={COLORS.bg} />
+        <View style={styles.header}>
+          <TouchableOpacity style={styles.backBtn} onPress={onClose}>
+            <Text style={styles.backIcon}>←</Text>
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>{strings.title}</Text>
+          <View style={{ width: 38 }} />
+        </View>
+        <View style={styles.emptyContainer}>
+          <Text style={styles.emptyEmoji}>✅</Text>
+          <Text style={styles.emptyTitle}>
+            {language === 'en' ? 'This booking is closed' : 'Đơn này đã kết thúc'}
+          </Text>
+          <Text style={styles.emptyDesc}>
+            {language === 'en'
+              ? 'The old chat was removed after the booking was completed.'
+              : 'Đoạn chat cũ đã được xóa sau khi đơn hoàn thành.'}
+          </Text>
+        </View>
+      </SafeAreaView>
     );
   }
 
@@ -203,7 +331,6 @@ function ActiveChatView({
   const therapist = activeBooking?.therapist;
   const therapistName = therapist?.name || existingRoom?.therapistName || '';
   const therapistAvatar = therapist?.avatar || '';
-  // Resolve userId to keep "my message" alignment consistent in test mode.
   const userId = user?.authUid || user?.phoneNumber || existingRoom?.customerId || existingRoom?.therapistId || '';
   const userRole: 'customer' | 'therapist' = user?.role === 'therapist' ? 'therapist' : 'customer';
 
@@ -267,7 +394,7 @@ function ActiveChatView({
 
         setRoomId(currentRoomId);
 
-        // Send system welcome messages if room is empty (helps both test mode and real flow)
+        // Send system welcome messages if room is empty
         const existingMessages = await getChatMessages(currentRoomId, 1);
         if (existingMessages.length === 0) {
           const now = new Date();

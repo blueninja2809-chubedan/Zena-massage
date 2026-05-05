@@ -870,4 +870,12 @@ app.listen(PORT, HOST, () => {
       pid: !!((VIETGUYS_PID || '').trim()),
     }),
   );
+  // Tránh OTP request đầu tiên sau restart phải refresh token (≤12s) + gửi SMS (≤9s) trong khi app chỉ chờ ~12s → timeout.
+  if (VIETGUYS_USERNAME && VIETGUYS_REFRESH_TOKEN && vietGuysHasSmsCredential()) {
+    getVietGuysPwdForSms()
+      .then(() => console.log('[SMS-BACKEND] VietGuys access token warm-up OK'))
+      .catch((e) =>
+        console.warn('[SMS-BACKEND] VietGuys warm-up failed (OTP vẫn chạy, có thể chậm hơn):', e?.message || e),
+      );
+  }
 });

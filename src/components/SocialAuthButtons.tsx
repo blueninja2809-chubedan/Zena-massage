@@ -1,18 +1,50 @@
-import type { UserData } from '@/contexts/UserContext';
 import { AppColors } from '@/constants/appColors';
-import { FontAwesome5 } from '@expo/vector-icons';
+import type { UserData } from '@/contexts/UserContext';
 import {
-  finalizeOAuthUserProfile,
-  hasGoogleOAuthConfig,
-  signInWithAppleIdentityToken,
-  signInWithGoogleOAuthBrowser,
+    finalizeOAuthUserProfile,
+    hasGoogleOAuthConfig,
+    signInWithAppleIdentityToken,
+    signInWithGoogleOAuthBrowser,
 } from '@/lib/oauthSupabase';
+import { FontAwesome5 } from '@expo/vector-icons';
 import * as AppleAuthentication from 'expo-apple-authentication';
 import * as WebBrowser from 'expo-web-browser';
 import React, { useCallback, useState } from 'react';
 import { ActivityIndicator, Alert, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 WebBrowser.maybeCompleteAuthSession();
+
+function getAuthErrorMessage(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (e && typeof e === 'object') {
+    const o = e as Record<string, unknown>;
+    if (typeof o.message === 'string') return o.message;
+    if (typeof o.msg === 'string') return o.msg;
+    try {
+      return JSON.stringify(e);
+    } catch {
+      return String(e);
+    }
+  }
+  return String(e);
+}
+
+/** Supabase: Apple chưa bật / chưa lưu xong, hoặc gọi sai provider. */
+function formatAppleSupabaseError(message: string, isEn: boolean): string {
+  const m = message.trim();
+  const appleOff =
+    /not enabled/i.test(m) ||
+    /unsupported provider/i.test(m) ||
+    /provider is not enabled/i.test(m) ||
+    /validation_failed/i.test(m) ||
+    /appleid\.apple\.com/i.test(m);
+  if (appleOff) {
+    return isEn
+      ? 'Apple Sign-In is not active on Supabase yet.\n\nIn Dashboard: Authentication → Providers → Apple — turn ON and Save with Client IDs + Secret Key (JWT). If you just edited settings, wait a few seconds and try again.\n\nDocs: https://supabase.com/docs/guides/auth/social-login/auth-apple'
+      : '🍎 Apple Sign-In chưa được Supabase chấp nhận.\n\nVào Supabase: Authentication → Providers → Apple — bật Enable, điền Client IDs + Secret Key (JWT), bấm Save. Nếu vừa lưu, đợi vài giây rồi thử lại.\n\nHướng dẫn: https://supabase.com/docs/guides/auth/social-login/auth-apple';
+  }
+  return m;
+}
 
 const COLORS = {
   primaryDark: AppColors.primaryDark,
@@ -37,6 +69,7 @@ export function SocialAuthButtons({ isEn, onUserReady }: Props) {
     await onUserReady(raw);
   }, [isEn, onUserReady]);
 
+  /** Google: Supabase OAuth + in-app browser (không dùng expo-auth-session — tránh native ExpoCrypto / cần rebuild binary). */
   const onPressGoogle = async () => {
     if (!hasGoogleOAuthConfig()) {
       Alert.alert(
@@ -58,8 +91,8 @@ export function SocialAuthButtons({ isEn, onUserReady }: Props) {
       Alert.alert(
         isEn ? 'Google sign-in failed' : 'Đăng nhập Google thất bại',
         isEn
-          ? `${msg}\n\nEnable Google in Supabase Auth and add your app redirect URL to Redirect URLs.`
-          : `${msg}\n\nBật Google trong Supabase Auth và thêm redirect URL app vào Redirect URLs.`,
+          ? `${msg}\n\nEnable Google on Supabase, add Callback URL in Google Cloud (Web client), and add app redirect URLs in Supabase.`
+          : `${msg}\n\nBật Google trên Supabase, thêm Callback URL trong Google Cloud (Web client), và thêm redirect URL app trên Supabase.`,
       );
     } finally {
       setBusy(false);
@@ -68,6 +101,15 @@ export function SocialAuthButtons({ isEn, onUserReady }: Props) {
 
   const onPressApple = async () => {
     if (Platform.OS !== 'ios') return;
+    if (!hasGoogleOAuthConfig()) {
+      Alert.alert(
+        isEn ? 'Configuration' : 'Cấu hình',
+        isEn
+          ? 'Set EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY in .env'
+          : 'Thêm EXPO_PUBLIC_SUPABASE_URL và EXPO_PUBLIC_SUPABASE_ANON_KEY vào .env',
+      );
+      return;
+    }
     try {
       const available = await AppleAuthentication.isAvailableAsync();
       if (!available) {
@@ -89,7 +131,8 @@ export function SocialAuthButtons({ isEn, onUserReady }: Props) {
       if (e && typeof e === 'object' && 'code' in e && (e as { code?: string }).code === 'ERR_REQUEST_CANCELED') {
         return;
       }
-      const msg = e instanceof Error ? e.message : String(e);
+      const raw = getAuthErrorMessage(e);
+      const msg = formatAppleSupabaseError(raw, isEn);
       Alert.alert(isEn ? 'Apple sign-in failed' : 'Đăng nhập Apple thất bại', msg);
     } finally {
       setBusy(false);

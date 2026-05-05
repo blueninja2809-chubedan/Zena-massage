@@ -1,1 +1,1 @@
-npm run web          # http://localhost:8081
+-- Legacy placeholder. Expo push token column is added in 015_profiles_push_token.sql.

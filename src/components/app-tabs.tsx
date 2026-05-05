@@ -1,30 +1,31 @@
 import Feather from '@expo/vector-icons/Feather';
 import { Tabs } from 'expo-router';
 import React from 'react';
-import { useColorScheme, useWindowDimensions } from 'react-native';
+import { StyleSheet, useWindowDimensions, type ViewStyle } from 'react-native';
 
 import { AppColors } from '@/constants/appColors';
+import { debugLog } from '@/lib/debugLog';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useUser } from '@/contexts/UserContext';
 
-const TAB_COLORS = {
-  light: {
-    background: AppColors.bg,
-    iconDefault: '#6B5F52',
-    iconSelected: AppColors.primaryDark,
-    textDefault: '#6B5F52',
-    textSelected: AppColors.primaryDark,
-  },
-  dark: {
-    background: '#141210',
-    iconDefault: '#9A8F85',
-    iconSelected: AppColors.primary,
-    textDefault: '#9A8F85',
-    textSelected: AppColors.primary,
-  },
+/** Full-bleed tab scenes — avoids letterboxing on some devices / aspect ratios. */
+const TAB_SCENE_STYLE: ViewStyle = {
+  flex: 1,
+  width: '100%',
+  maxWidth: '100%',
+  alignSelf: 'stretch',
+};
+
+/** Always light “Zena” tab bar — system dark mode was making the bar near-black and clashing with the cream UI */
+const TAB_BAR = {
+  background: AppColors.bg,
+  iconDefault: '#6B5F52',
+  iconSelected: AppColors.primaryDark,
+  textDefault: '#6B5F52',
+  textSelected: AppColors.primaryDark,
 } as const;
 
-type TabPalette = (typeof TAB_COLORS)[keyof typeof TAB_COLORS];
+type TabPalette = typeof TAB_BAR;
 
 function CustomerTabs({
   palette,
@@ -35,25 +36,24 @@ function CustomerTabs({
 }: {
   palette: TabPalette;
   isEn: boolean;
-  tabLabelStyle: { fontSize: number; fontWeight: '700' };
+  tabLabelStyle: { fontSize: number; fontWeight: '700'; marginTop?: number; marginBottom?: number };
   tabItemStyle: {
     borderRadius: number;
     marginHorizontal: number;
+    paddingVertical?: number;
   };
   tabBarStyle: {
     backgroundColor: string;
     borderTopWidth: number;
     elevation: number;
     shadowOpacity: number;
-    height?: number;
-    paddingBottom?: number;
-    paddingTop?: number;
   };
 }) {
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
+        sceneStyle: TAB_SCENE_STYLE,
         tabBarActiveTintColor: palette.textSelected,
         tabBarInactiveTintColor: palette.textDefault,
         tabBarLabelStyle: tabLabelStyle,
@@ -76,17 +76,17 @@ function CustomerTabs({
         }}
       />
       <Tabs.Screen
-        name="account"
-        options={{
-          title: isEn ? 'Account' : 'Tài khoản',
-          tabBarIcon: ({ color, size }) => <Feather name="user" color={color} size={size} />,
-        }}
-      />
-      <Tabs.Screen
         name="support"
         options={{
           title: isEn ? 'Support' : 'Hỗ trợ',
           tabBarIcon: ({ color, size }) => <Feather name="phone-call" color={color} size={size} />,
+        }}
+      />
+      <Tabs.Screen
+        name="account"
+        options={{
+          title: isEn ? 'Account' : 'Tài khoản',
+          tabBarIcon: ({ color, size }) => <Feather name="user" color={color} size={size} />,
         }}
       />
       <Tabs.Screen name="therapist-home" options={{ href: null }} />
@@ -104,25 +104,24 @@ function TherapistTabs({
 }: {
   palette: TabPalette;
   isEn: boolean;
-  tabLabelStyle: { fontSize: number; fontWeight: '700' };
+  tabLabelStyle: { fontSize: number; fontWeight: '700'; marginTop?: number; marginBottom?: number };
   tabItemStyle: {
     borderRadius: number;
     marginHorizontal: number;
+    paddingVertical?: number;
   };
   tabBarStyle: {
     backgroundColor: string;
     borderTopWidth: number;
     elevation: number;
     shadowOpacity: number;
-    height?: number;
-    paddingBottom?: number;
-    paddingTop?: number;
   };
 }) {
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
+        sceneStyle: TAB_SCENE_STYLE,
         tabBarActiveTintColor: palette.textSelected,
         tabBarInactiveTintColor: palette.textDefault,
         tabBarLabelStyle: tabLabelStyle,
@@ -144,17 +143,17 @@ function TherapistTabs({
         }}
       />
       <Tabs.Screen
-        name="account"
-        options={{
-          title: isEn ? 'Account' : 'Tài khoản',
-          tabBarIcon: ({ color, size }) => <Feather name="user" color={color} size={size} />,
-        }}
-      />
-      <Tabs.Screen
         name="support"
         options={{
           title: isEn ? 'Support' : 'Hỗ trợ',
           tabBarIcon: ({ color, size }) => <Feather name="phone-call" color={color} size={size} />,
+        }}
+      />
+      <Tabs.Screen
+        name="account"
+        options={{
+          title: isEn ? 'Account' : 'Tài khoản',
+          tabBarIcon: ({ color, size }) => <Feather name="user" color={color} size={size} />,
         }}
       />
       <Tabs.Screen name="index" options={{ href: null }} />
@@ -164,34 +163,46 @@ function TherapistTabs({
 }
 
 export default function AppTabs() {
-  const scheme = useColorScheme();
   const { width, height } = useWindowDimensions();
   const isTablet = Math.min(width, height) >= 768;
-  const palette = TAB_COLORS[scheme === 'dark' ? 'dark' : 'light'];
+  const palette: TabPalette = TAB_BAR;
   const { user } = useUser();
   const { language } = useLanguage();
   const isEn = language === 'en';
+
+  /**
+   * Do not set height / paddingBottom on tabBarStyle: @react-navigation/bottom-tabs already applies
+   * paddingBottom: insets.bottom for the home indicator. Our old fixed height + paddingBottom + marginBottom
+   * overwrote that on real devices (simulator often has bottom inset 0 so it looked fine).
+   */
   const tabLabelStyle = {
-    fontSize: isTablet ? 14 : 13,
+    fontSize: isTablet ? 13 : 12,
     fontWeight: '700' as const,
-    marginLeft: isTablet ? 3 : 2,
+    marginTop: 2,
+    marginBottom: 0,
   };
   const tabItemStyle = {
     borderRadius: 0,
-    marginHorizontal: isTablet ? 6 : 4,
+    marginHorizontal: isTablet ? 6 : 2,
+    paddingVertical: isTablet ? 4 : 3,
   };
   const tabBarStyle = {
     backgroundColor: palette.background,
-    borderTopWidth: 0.5,
-    borderTopColor: 'rgba(0,0,0,0.08)',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(47,36,28,0.12)',
     elevation: 0,
     shadowOpacity: 0,
-    height: isTablet ? 68 : 64,
-    paddingBottom: isTablet ? 5 : 6,
-    paddingTop: isTablet ? 6 : 7,
-    /** Nâng cả thanh tab lên khỏi mép dưới màn hình một chút */
-    marginBottom: isTablet ? 10 : 12,
   };
+
+  React.useEffect(() => {
+    debugLog('app-tabs', {
+      w: width,
+      h: height,
+      isTablet,
+      role: user?.role ?? 'customer',
+      tabLabelFont: tabLabelStyle.fontSize,
+    });
+  }, [width, height, isTablet, user?.role, tabLabelStyle.fontSize]);
 
   if (user?.role === 'therapist') {
     return (

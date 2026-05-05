@@ -5,13 +5,13 @@ import { getNotifications, markNotificationAsRead } from '@/lib/supabaseService'
 import type { Notification } from '@/lib/types';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  FlatList,
-  Pressable,
-  ScrollView,
-  StatusBar,
-  StyleSheet,
-  Text,
-  View,
+    FlatList,
+    Pressable,
+    ScrollView,
+    StatusBar,
+    StyleSheet,
+    Text,
+    View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -58,7 +58,15 @@ const NOTIF_ICON: Record<Notification['type'], { emoji: string; bg: string; colo
   job: { emoji: '💼', bg: '#E8EAF6', color: '#3F51B5' },
 };
 
-export default function NotificationScreen({ onClose }: { onClose: () => void }) {
+type NotificationNavigateTarget = 'job' | 'booking';
+
+export default function NotificationScreen({
+  onClose,
+  onOpenRelated,
+}: {
+  onClose: () => void;
+  onOpenRelated?: (target: NotificationNavigateTarget, relatedId?: string) => void;
+}) {
   const { user } = useUser();
   const { language } = useLanguage();
   const strings = translations[language as keyof typeof translations] || translations.vi;
@@ -114,11 +122,15 @@ export default function NotificationScreen({ onClose }: { onClose: () => void })
     setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
   };
 
-  const handleTapNotification = async (id: string) => {
-    await markNotificationAsRead(id).catch(() => {});
+  const handleTapNotification = async (item: Notification) => {
+    await markNotificationAsRead(item.id).catch(() => {});
     setNotifications((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, isRead: true } : n)),
+      prev.map((n) => (n.id === item.id ? { ...n, isRead: true } : n)),
     );
+    if (item.type === 'job' || item.type === 'booking') {
+      onOpenRelated?.(item.type, item.relatedId);
+      onClose();
+    }
   };
 
   const renderNotification = (item: Notification) => {
@@ -130,7 +142,7 @@ export default function NotificationScreen({ onClose }: { onClose: () => void })
       <Pressable
         key={item.id}
         style={[styles.notifCard, !item.isRead && styles.notifUnread]}
-        onPress={() => handleTapNotification(item.id)}
+        onPress={() => handleTapNotification(item)}
       >
         <View style={[styles.notifIconWrap, { backgroundColor: icon.bg }]}>
           <Text style={styles.notifIconEmoji}>{icon.emoji}</Text>

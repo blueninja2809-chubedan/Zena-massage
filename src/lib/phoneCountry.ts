@@ -1,4 +1,4 @@
-/** Chuẩn hoá SĐT gửi backend (app_users) — VN: 0xxxxxxxxx; quốc tế: +cc... */
+/** Chuẩn hoá SĐT gửi backend (profiles) — VN: 0xxxxxxxxx; quốc tế: +cc... */
 export function nationalDigitsToAppPhone(callingCode: string, national: string): string {
   const d = national.replace(/\D/g, '');
   if (!d) return '';

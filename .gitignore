@@ -25,6 +25,7 @@ expo-env.d.ts
 npm-debug.*
 yarn-debug.*
 yarn-error.*
+ios-last-build.log
 
 # macOS
 .DS_Store
@@ -33,6 +34,9 @@ yarn-error.*
 # local env files
 .env
 .env*.local
+
+# Play Console upload (EAS Submit) — không commit JSON service account
+credentials/
 
 # typescript
 *.tsbuildinfo
@@ -45,3 +49,8 @@ app-example
 
 # Admin dashboard — separate Git repo (clone/push riêng)
 admin-panel/
+
+# IDE / local scratch / logs
+.idea/
+.tmp-py/
+logs/

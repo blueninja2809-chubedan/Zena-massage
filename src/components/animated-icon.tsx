@@ -1,40 +1,73 @@
 import { AppColors } from '@/constants/appColors';
-import { useEffect, useState } from 'react';
-import { Image, StyleSheet, Text, View } from 'react-native';
+import { SplashLotusLottie } from '@/components/SplashLotusLottie';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { StyleSheet, Text, View } from 'react-native';
 import Animated, {
-    Easing,
-    FadeIn,
-    FadeOut,
-    Keyframe,
-    SharedValue,
-    useAnimatedStyle,
-    useSharedValue,
-    withRepeat,
-    withSequence,
-    withTiming,
+  Easing,
+  FadeIn,
+  FadeOut,
+  Keyframe,
+  SharedValue,
+  useAnimatedStyle,
+  useSharedValue,
+  withRepeat,
+  withSequence,
+  withTiming,
 } from 'react-native-reanimated';
 
-const SPLASH_DISPLAY_MS = 2400;
+const yogaLotusFlower = require('@/assets/lottie/yoga-lotus-flower.json') as {
+  fr?: number;
+  op?: number;
+};
 
-export function AnimatedSplashOverlay() {
+/** Thời lượng một lần chạy từ Lottie meta (`op`/`fr`). */
+const LOTUS_ONE_SHOT_MS = Math.ceil(
+  ((Number(yogaLotusFlower.op) || 40) / (Number(yogaLotusFlower.fr) || 10)) * 1000,
+);
+
+/** Tối thiểu hiển thị màn loading (ms). */
+const MIN_VISIBLE_MS = 2400;
+
+const LOADING_LABEL = 'Đang tải, vui lòng chờ';
+
+export type AnimatedSplashOverlayProps = {
+  /** Splash in-app: tự ẩn sau N ms (không dùng chung với `onDismissed`). */
+  autoDismissMs?: number | null;
+  /**
+   * Khi có `onDismissed`: `true` = dữ liệu xong; chỉ gọi callback sau khi **hết một vòng Lottie**
+   * và đã hiển thị tối thiểu `MIN_VISIBLE_MS` kể từ lúc mở màn.
+   */
+  readyToDismiss?: boolean;
+  onDismissed?: () => void;
+};
+
+export type ZenaLoadingScreenProps = Pick<AnimatedSplashOverlayProps, 'readyToDismiss' | 'onDismissed'>;
+
+export function AnimatedSplashOverlay({
+  autoDismissMs = null,
+  readyToDismiss = false,
+  onDismissed,
+}: AnimatedSplashOverlayProps) {
   const [visible, setVisible] = useState(true);
-  const scale = useSharedValue(0.8);
   const dotOpacity1 = useSharedValue(0.3);
   const dotOpacity2 = useSharedValue(0.3);
   const dotOpacity3 = useSharedValue(0.3);
 
-  useEffect(() => {
-    // Logo scale-in animation
-    scale.value = withTiming(1, { duration: 600, easing: Easing.out(Easing.ease) });
+  const gate = typeof onDismissed === 'function';
+  const openedAtRef = useRef(Date.now());
+  const [animFinished, setAnimFinished] = useState(false);
+  const onDismissedRef = useRef(onDismissed);
+  onDismissedRef.current = onDismissed;
 
-    // Dot loading animation (sequential)
+  const handleAnimFinish = useCallback(() => {
+    setAnimFinished(true);
+  }, []);
+
+  useEffect(() => {
     const animateDot = (sv: SharedValue<number>, delay: number) => {
       setTimeout(() => {
         sv.value = withRepeat(
-          withSequence(
-            withTiming(1, { duration: 400 }),
-            withTiming(0.3, { duration: 400 }),
-          ),
+          withSequence(withTiming(1, { duration: 400 }), withTiming(0.3, { duration: 400 })),
           -1,
           true,
         );
@@ -44,15 +77,30 @@ export function AnimatedSplashOverlay() {
     animateDot(dotOpacity2, 200);
     animateDot(dotOpacity3, 400);
 
-    // Hide after delay
-    const timer = setTimeout(() => setVisible(false), SPLASH_DISPLAY_MS);
-    return () => clearTimeout(timer);
+    if (!gate && autoDismissMs != null && autoDismissMs > 0) {
+      const timer = setTimeout(() => setVisible(false), autoDismissMs);
+      return () => clearTimeout(timer);
+    }
+    return undefined;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [gate, autoDismissMs]);
 
-  const logoStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
-  }));
+  useEffect(() => {
+    if (!gate) return;
+    const t = setTimeout(() => setAnimFinished(true), LOTUS_ONE_SHOT_MS + 2000);
+    return () => clearTimeout(t);
+  }, [gate]);
+
+  useEffect(() => {
+    if (!gate) return;
+    if (!(readyToDismiss && animFinished)) return;
+    const elapsed = Date.now() - openedAtRef.current;
+    const delay = Math.max(0, MIN_VISIBLE_MS - elapsed);
+    const t = setTimeout(() => {
+      onDismissedRef.current?.();
+    }, delay);
+    return () => clearTimeout(t);
+  }, [gate, readyToDismiss, animFinished]);
 
   const dot1Style = useAnimatedStyle(() => ({ opacity: dotOpacity1.value }));
   const dot2Style = useAnimatedStyle(() => ({ opacity: dotOpacity2.value }));
@@ -61,27 +109,25 @@ export function AnimatedSplashOverlay() {
   if (!visible) return null;
 
   return (
-    <Animated.View
-      exiting={FadeOut.duration(500)}
-      style={splashStyles.container}
-    >
-      {/* ZENA Logo */}
-      <Animated.View entering={FadeIn.duration(600).delay(200)} style={[splashStyles.logoArea, logoStyle]}>
-        <Image
-          source={require('@/assets/images/zena-logo.png')}
-          style={splashStyles.logoImage}
-          resizeMode="contain"
+    <Animated.View exiting={FadeOut.duration(500)} style={splashStyles.container}>
+      <Animated.View entering={FadeIn.duration(500).delay(120)} style={splashStyles.lottieWrap}>
+        <SplashLotusLottie
+          key={gate ? 'gated' : 'loop'}
+          animationData={yogaLotusFlower as Record<string, unknown>}
+          autoPlay
+          loop={!gate}
+          onAnimationFinish={gate ? handleAnimFinish : undefined}
+          style={splashStyles.lottie}
         />
       </Animated.View>
 
-      {/* Loading area */}
-      <Animated.View entering={FadeIn.duration(500).delay(600)} style={splashStyles.loadingArea}>
+      <Animated.View entering={FadeIn.duration(500).delay(400)} style={splashStyles.loadingArea}>
         <View style={splashStyles.dotsRow}>
           <Animated.View style={[splashStyles.dot, dot1Style]} />
           <Animated.View style={[splashStyles.dot, dot2Style]} />
           <Animated.View style={[splashStyles.dot, dot3Style]} />
         </View>
-        <Text style={splashStyles.loadingText}>Đang tải, vui lòng chờ...</Text>
+        <Text style={splashStyles.loadingText}>{LOADING_LABEL}</Text>
       </Animated.View>
     </Animated.View>
   );
@@ -89,24 +135,25 @@ export function AnimatedSplashOverlay() {
 
 const splashStyles = StyleSheet.create({
   container: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#FFFFFF',
-    zIndex: 1000,
+    flex: 1,
+    width: '100%',
+    height: '100%',
+    backgroundColor: AppColors.bg,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  logoArea: {
+  lottieWrap: {
     alignItems: 'center',
     justifyContent: 'center',
   },
-  logoImage: {
-    width: 1000,
-    height: 440,
+  lottie: {
+    width: 280,
+    height: 280,
   },
   loadingArea: {
     alignItems: 'center',
     position: 'absolute',
-    bottom: 120,
+    bottom: 100,
     gap: 14,
   },
   dotsRow: {
@@ -189,3 +236,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
   },
 });
+
+export default function ZenaLoadingScreen({ readyToDismiss, onDismissed }: ZenaLoadingScreenProps) {
+  return <AnimatedSplashOverlay readyToDismiss={readyToDismiss} onDismissed={onDismissed} />;
+}

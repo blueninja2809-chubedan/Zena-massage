@@ -18,7 +18,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 const translations = {
   vi: {
     title: 'Ưu đãi',
-    subtitle: 'Khuyến mãi dành cho bạn',
+    subtitle: 'Mã do nhà điều hành phát hành — mỗi mã một lần dùng',
     off: 'GIẢM',
     code: 'Mã',
     expires: 'HSD',
@@ -28,11 +28,11 @@ const translations = {
     noPromos: 'Chưa có ưu đãi nào',
     hotDeal: '🔥 Hot Deal',
     limited: 'Có hạn',
-    newUser: 'Người mới',
+    singleUse: 'Một lần dùng',
   },
   en: {
     title: 'Promotions',
-    subtitle: 'Special offers for you',
+    subtitle: 'Admin-issued codes — one use per code',
     off: 'OFF',
     code: 'Code',
     expires: 'Exp',
@@ -42,7 +42,7 @@ const translations = {
     noPromos: 'No promotions available',
     hotDeal: '🔥 Hot Deal',
     limited: 'Limited',
-    newUser: 'New User',
+    singleUse: 'Single use',
   },
 };
 
@@ -68,7 +68,6 @@ type PromoTag = { label: string; color: string; bg: string };
 function getPromoTag(promo: Promotion, strings: Record<string, string>): PromoTag | null {
   if (promo.discountPercent >= 50) return { label: strings.hotDeal, color: COLORS.orange, bg: COLORS.orangeLight };
   if (promo.discountPercent >= 30) return { label: strings.limited, color: COLORS.primary, bg: AppColors.primarySoft };
-  if (promo.code.includes('NEW') || promo.code.includes('INVITE')) return { label: strings.newUser, color: COLORS.green, bg: COLORS.greenLight };
   return null;
 }
 
@@ -130,6 +129,7 @@ export default function PromotionsScreen({ onClose }: { onClose?: () => void } =
             </View>
             <View style={styles.cardTextCol}>
               <Text style={styles.promoDesc} numberOfLines={3}>{item.description}</Text>
+              <Text style={styles.remainingUses}>{strings.singleUse}</Text>
             </View>
           </View>
 
@@ -322,6 +322,12 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: COLORS.text,
     lineHeight: 20,
+  },
+  remainingUses: {
+    marginTop: 6,
+    fontSize: 12,
+    fontWeight: '600',
+    color: COLORS.subText,
   },
   cardBottomRow: {
     flexDirection: 'row',

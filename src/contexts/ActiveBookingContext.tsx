@@ -1,3 +1,4 @@
+import { mapGlowPaymentMethodIdToZena } from '@/lib/paymentMethodId';
 import React, { createContext, useCallback, useContext, useState } from 'react';
 
 export interface ConnectedTherapistInfo {
@@ -30,7 +31,14 @@ export function ActiveBookingProvider({ children }: { children: React.ReactNode 
   const [activeBooking, setActiveBookingState] = useState<ActiveBookingData | null>(null);
 
   const setActiveBooking = useCallback((booking: ActiveBookingData | null) => {
-    setActiveBookingState(booking);
+    if (!booking) {
+      setActiveBookingState(null);
+      return;
+    }
+    setActiveBookingState({
+      ...booking,
+      paymentMethod: mapGlowPaymentMethodIdToZena(booking.paymentMethod),
+    });
   }, []);
 
   const clearActiveBooking = useCallback(() => {

@@ -6,7 +6,6 @@ interface ZaloIconProps {
 }
 
 export default function ZaloIcon({ size = 32 }: ZaloIconProps) {
-  const scale = size / 100;
   return (
     <Svg width={size} height={size} viewBox="0 0 100 100">
       {/* Crescent / speech bubble shape */}

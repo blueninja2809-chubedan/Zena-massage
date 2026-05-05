@@ -44,7 +44,7 @@ export default function BookingSuccessScreen() {
               <Feather name="check" size={40} color="#0F766E" />
             </View>
             <Text style={s.title}>Đặt lịch thành công!</Text>
-            <Text style={s.subtitle}>Cảm ơn bạn đã tin tưởng Glow. Chúng tôi sẽ liên hệ qua Zalo để xác nhận.</Text>
+            <Text style={s.subtitle}>Cảm ơn bạn đã tin tưởng Zena. Chúng tôi sẽ liên hệ qua Zalo để xác nhận.</Text>
           </View>
         </SafeAreaView>
       </LinearGradient>

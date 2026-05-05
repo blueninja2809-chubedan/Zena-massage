@@ -91,7 +91,7 @@ export default function TherapistEarningsScreen() {
   const allBookings = getTherapistBookings(displayName);
 
   // Filter bookings by period and compute earnings
-  const { filteredBookings, totalAmount, completedCount, pendingCount } = useMemo(() => {
+  const { filteredBookings, completedCount, pendingCount } = useMemo(() => {
     const now = new Date();
     const today = now.toISOString().slice(0, 10);
     let cutoff: string;
@@ -112,7 +112,6 @@ export default function TherapistEarningsScreen() {
     const completed = filtered.filter(b => b.status === 'completed');
     return {
       filteredBookings: filtered,
-      totalAmount: completed.reduce((sum, b) => sum + b.price, 0),
       completedCount: completed.length,
       pendingCount: filtered.filter((b) => b.status === 'pending' || b.status === 'confirmed').length,
     };
@@ -138,7 +137,7 @@ export default function TherapistEarningsScreen() {
         const fee = Math.round((b.price * 0.33) / 1000) * 1000;
         list.push({
           id: `fee-${b.id}`,
-          title: `Phí Glow - đơn ${b.id.slice(-8).toUpperCase()}`,
+          title: `Phí Zena - đơn ${b.id.slice(-8).toUpperCase()}`,
           amount: -fee,
           date: `${b.date}T12:00:00.000Z`,
           success: true,
@@ -266,7 +265,7 @@ const s = StyleSheet.create({
   },
   title: { fontSize: 16, color: C.text, fontWeight: '500' },
   subtitle: { fontSize: 13, color: C.sub, marginTop: 3 },
-  amount: { fontSize: 40, lineHeight: 44, fontWeight: '800', color: C.text, marginTop: 8 },
+  amount: { fontSize: 24, lineHeight: 30, fontWeight: '400', color: C.text, marginTop: 8 },
   amountHint: { color: C.sub, fontSize: 13, marginTop: 4 },
   miniStatRow: { flexDirection: 'row', gap: 10, marginTop: 14 },
   miniStatCard: {

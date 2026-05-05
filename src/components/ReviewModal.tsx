@@ -1,7 +1,7 @@
+import { AppColors } from '@/constants/appColors';
 import type { SharedBooking } from '@/contexts/BookingsContext';
 import { useBookings } from '@/contexts/BookingsContext';
 import { useLanguage } from '@/contexts/LanguageContext';
-import { AppColors } from '@/constants/appColors';
 import Feather from '@expo/vector-icons/Feather';
 import React, { useState } from 'react';
 import {

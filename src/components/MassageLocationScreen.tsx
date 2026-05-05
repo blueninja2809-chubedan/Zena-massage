@@ -1,7 +1,9 @@
+import { AppColors } from '@/constants/appColors';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useUser } from '@/contexts/UserContext';
-import { getServices, getTherapists } from '@/lib/supabaseService';
-import type { Service, Therapist } from '@/lib/types';
+import { canUseAppFeatures } from '@/lib/session';
+import { getServices } from '@/lib/supabaseService';
+import type { Service } from '@/lib/types';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
 import {
@@ -21,7 +23,6 @@ import {
     TouchableOpacity,
     View
 } from 'react-native';
-import { AppColors } from '@/constants/appColors';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 const translations = {
@@ -162,16 +163,6 @@ interface LocationService {
 
 const FILTER_TAGS = ['Ưu đãi lần đầu', 'Giờ cao điểm', 'Giờ thấp điểm'];
 
-// Mock nearby therapists for booking search screen
-interface NearbyTherapist {
-  id: string;
-  name: string;
-  avatar: string;
-  rating: number;
-  reviewCount: number;
-  distance: number;
-}
-
 const { width: SCREEN_W } = Dimensions.get('window');
 
 function toLocationService(item: Service): LocationService {
@@ -194,17 +185,6 @@ function toLocationService(item: Service): LocationService {
   };
 }
 
-function toNearbyTherapist(item: Therapist): NearbyTherapist {
-  return {
-    id: item.id,
-    name: item.name,
-    avatar: item.avatar || 'https://picsum.photos/seed/therapist-default/200/200',
-    rating: item.rating ?? 5,
-    reviewCount: item.reviewCount ?? 0,
-    distance: Math.max(1, Math.round(item.distanceFromCenter || 5)),
-  };
-}
-
 type SortType = 'nearby' | 'popular' | 'topRated';
 
 export default function MassageLocationScreen({ onClose }: { onClose?: () => void } = {}) {
@@ -219,15 +199,13 @@ export default function MassageLocationScreen({ onClose }: { onClose?: () => voi
   const [appliedTags, setAppliedTags] = useState<Record<string, boolean>>({});
   const [selectedService, setSelectedService] = useState<LocationService | null>(null);
   const [services, setServices] = useState<LocationService[]>([]);
-  const [nearbyTherapists, setNearbyTherapists] = useState<NearbyTherapist[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     (async () => {
       try {
-        const [serviceRows, therapistRows] = await Promise.all([getServices(), getTherapists()]);
+        const serviceRows = await getServices();
         setServices(serviceRows.map(toLocationService));
-        setNearbyTherapists(therapistRows.map(toNearbyTherapist));
       } finally {
         setIsLoading(false);
       }
@@ -645,7 +623,7 @@ function ServiceDetailModal({
           <TouchableOpacity
             style={detailStyles.bookNowBtn}
             onPress={() => {
-              if (!user?.authUid) {
+              if (!canUseAppFeatures(user)) {
                 Alert.alert(
                   'Đăng nhập',
                   'Vui lòng đăng nhập để đặt lịch dịch vụ.',

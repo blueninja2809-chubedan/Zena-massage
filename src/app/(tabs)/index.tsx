@@ -1,47 +1,91 @@
+import Feather from '@expo/vector-icons/Feather';
+import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-    ActivityIndicator,
-    FlatList,
-    Image,
-    InteractionManager,
-    Modal,
-    ScrollView,
-    StatusBar,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    useWindowDimensions,
-    View
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  Image,
+  Modal,
+  Platform,
+  ScrollView,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  useWindowDimensions,
+  View
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import ChatScreen from '@/components/ChatScreen';
 import MassageHomeScreen from '@/components/MassageHomeScreen';
 import MassageLocationScreen from '@/components/MassageLocationScreen';
+import { ModalSafeAreaProvider } from '@/components/ModalSafeAreaProvider';
 import NotificationScreen from '@/components/NotificationScreen';
 import type { OnboardingLanguage } from '@/components/Onboarding';
 import PromotionsScreen from '@/components/PromotionsScreen';
 import TherapistTopUpScreen from '@/components/TherapistTopUpScreen';
 import WalletScreen from '@/components/WalletScreen';
 import { AppColors } from '@/constants/appColors';
-import { DEFAULT_CITY, SERVICE_TYPES, VIETNAM_PROVINCES } from '@/constants/bookingFilters';
+import { SERVICE_TYPES, VIETNAM_PROVINCES } from '@/constants/bookingFilters';
 import { useActiveBooking } from '@/contexts/ActiveBookingContext';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useNotifications } from '@/contexts/NotificationContext';
 import { useUser } from '@/contexts/UserContext';
 import { useTabletLayout } from '@/hooks/use-tablet-layout';
-import { getOrCreateWallet, getTherapists } from '@/lib/supabaseService';
+import {
+  consumeReopenMassageAfterRegion,
+  loadPersistedHomeSelectedCity,
+  persistHomeSelectedCity,
+} from '@/lib/homeSelectedRegionStorage';
+import {
+  applyCustomerDistanceToTherapists,
+  getStoredCustomerLocation,
+  refreshCustomerLocation,
+} from '@/lib/location';
+import { scheduleNonBlockingWork } from '@/lib/scheduleNonBlockingWork';
+import { canUseAppFeatures } from '@/lib/session';
+import { getOrCreateWallet, getTherapists, therapistDisplayImageCandidates } from '@/lib/supabaseService';
 import type { Therapist } from '@/lib/types';
+import { inferVietnamProvinceFromCoordinates } from '@/lib/vietnamProvinceFromGps';
 
-const HOME_SERVICE_TAG_EMOJIS = ['🧴', '♨️', '💆', '🌸', '🦶', '💪', '🧴', '🤲', '✨', '🛁', '👂'] as const;
+/** Banner slide trang chủ: thời gian mỗi ảnh trước khi tự chuyển (ms). Tăng = chậm hơn, giảm = nhanh hơn. */
+const HOME_PROMO_AUTOPLAY_MS = 6000;
+
+const HOME_SERVICE_TAG_ICON_NAMES: React.ComponentProps<typeof Feather>['name'][] = [
+  'droplet',
+  'activity',
+  'heart',
+  'sun',
+  'navigation',
+  'target',
+  'circle',
+  'zap',
+  'star',
+  'coffee',
+  'circle',
+];
 
 function getHomeServiceTags() {
   return SERVICE_TYPES.filter((n) => n !== 'Tất cả').map((label, i) => ({
-    emoji: HOME_SERVICE_TAG_EMOJIS[i] ?? '✨',
+    iconName: HOME_SERVICE_TAG_ICON_NAMES[i] ?? 'circle',
     label,
   }));
+}
+
+function formatDistanceLabel(distanceKm: number, updatingText: string): string {
+  if (!Number.isFinite(distanceKm) || distanceKm < 0) {
+    return updatingText;
+  }
+  if (distanceKm < 0.05) {
+    return '< 50 m';
+  }
+  if (distanceKm < 1) {
+    return `${Math.max(1, Math.round(distanceKm * 1000))} m`;
+  }
+  return `${Math.round(distanceKm * 10) / 10} km`;
 }
 
 const translations: Record<OnboardingLanguage, Record<string, string>> = {
@@ -54,7 +98,7 @@ const translations: Record<OnboardingLanguage, Record<string, string>> = {
     bannerLocTitle: '500+ địa điểm tập luyện và spa',
     bannerLocDesc: 'Giá tốt, dịch vụ đa dạng,\ncó mặt khắp mọi nơi',
     bannerPromoTitle: 'Ưu đãi hấp dẫn',
-    bannerPromoDesc: 'Giảm đến 50% cho lần đặt đầu tiên',
+    bannerPromoDesc: 'Mã giảm giá phát hành trong app — xem mục Ưu đãi khi có chương trình.',
     therapistListTitle: 'Kỹ thuật viên đang rảnh',
     therapistListDesc: 'Chọn kỹ thuật viên để xem giao diện booking',
     loadingTherapists: 'Đang tải kỹ thuật viên...',
@@ -65,7 +109,7 @@ const translations: Record<OnboardingLanguage, Record<string, string>> = {
     supportChannels: 'Kênh hỗ trợ',
     services: 'Dịch vụ',
     offers: 'Ưu đãi',
-    upTo50: 'Giảm đến 50%',
+    upTo50: 'Ưu đãi có thời hạn',
     vip: 'VIP',
     moreTherapists: 'Nhiều kỹ thuật viên hơn',
     featuredTherapists: 'Kỹ thuật viên nổi bật',
@@ -73,10 +117,11 @@ const translations: Record<OnboardingLanguage, Record<string, string>> = {
     age: 'Tuổi',
     yearsExp: 'năm kinh nghiệm',
     reviews: 'đánh giá',
-    selectCity: 'Chọn tỉnh/thành phố',
-    searchCity: 'Tìm tỉnh/thành...',
-    noCityFound: 'Không tìm thấy tỉnh/thành phù hợp',
     noTherapistsInCity: 'Chưa có kỹ thuật viên tại khu vực đã chọn',
+    distanceUpdating: 'Đang cập nhật',
+    detectingRegion: 'Đang xác định…',
+    pickRegion: 'Chọn khu vực',
+    selectRegionHint: 'Chọn tỉnh/thành ở góc trên hoặc bật định vị để xem kỹ thuật viên gần bạn.',
   },
   en: {
     balanceLabel: 'Balance',
@@ -87,7 +132,7 @@ const translations: Record<OnboardingLanguage, Record<string, string>> = {
     bannerLocTitle: '500+ training & spa locations',
     bannerLocDesc: 'Great prices, diverse services,\navailable everywhere',
     bannerPromoTitle: 'Exciting Offers',
-    bannerPromoDesc: 'Up to 50% off your first booking',
+    bannerPromoDesc: 'Promo codes posted in the app — check Offers when campaigns run.',
     therapistListTitle: 'Available therapists',
     therapistListDesc: 'Choose a therapist to preview the booking flow',
     loadingTherapists: 'Loading therapists...',
@@ -98,7 +143,7 @@ const translations: Record<OnboardingLanguage, Record<string, string>> = {
     supportChannels: 'Support channels',
     services: 'Services',
     offers: 'Offers',
-    upTo50: 'Up to 50% off',
+    upTo50: 'Limited-time offers',
     vip: 'VIP',
     moreTherapists: 'More therapists',
     featuredTherapists: 'Featured therapists',
@@ -106,10 +151,11 @@ const translations: Record<OnboardingLanguage, Record<string, string>> = {
     age: 'Age',
     yearsExp: 'years experience',
     reviews: 'reviews',
-    selectCity: 'Select province/city',
-    searchCity: 'Search province/city...',
-    noCityFound: 'No matching province/city',
     noTherapistsInCity: 'No therapists in selected area',
+    distanceUpdating: 'Updating',
+    detectingRegion: 'Detecting…',
+    pickRegion: 'Choose area',
+    selectRegionHint: 'Pick a province/city above or enable location to see therapists near you.',
   },
 };
 
@@ -123,159 +169,237 @@ const COLORS = {
   accent: AppColors.accent,
 };
 
-const isTestMode =
-  process.env.EXPO_PUBLIC_TEST_MODE === 'true' ||
-  process.env.EXPO_PUBLIC_TEST_MODE === '1' ||
-  (typeof __DEV__ !== 'undefined' && __DEV__);
-
-function buildMockFeaturedTherapists(city: string): Therapist[] {
-  const now = new Date().toISOString();
-  const baseCity = city?.trim() || DEFAULT_CITY;
-  return [
-    {
-      id: 'mock-therapist-1',
-      name: 'Linh Anh',
-      phoneNumber: '0901000001',
-      email: 'linhanh.mock@zena.vn',
-      gender: 'female',
-      avatar: 'https://i.pravatar.cc/300?img=47',
-      bio: 'KTV nhẹ nhàng, chuyên massage thư giãn tại nhà.',
-      bioEn: 'Gentle therapist specialized in relaxing home massage.',
-      specialties: ['Massage Dầu + Giác Hơi', 'Massage Thái'],
-      experience: 5,
-      rating: 4.9,
-      reviewCount: 128,
-      hourlyRate: 380000,
-      distanceFromCenter: 1.3,
-      workingCity: baseCity,
-      isAvailable: true,
-      availability: {},
-      languages: ['vi', 'en'],
-      certifications: ['Spa Therapy'],
-      createdAt: now,
-    },
-    {
-      id: 'mock-therapist-2',
-      name: 'Ngọc Mai',
-      phoneNumber: '0901000002',
-      email: 'ngocmai.mock@zena.vn',
-      gender: 'female',
-      avatar: 'https://i.pravatar.cc/300?img=32',
-      bio: 'KTV kinh nghiệm cao, lực tay tốt, phù hợp dân văn phòng.',
-      bioEn: 'Experienced therapist with strong pressure for office workers.',
-      specialties: ['Massage Đá Nóng', 'Massage Cổ Vai Gáy'],
-      experience: 7,
-      rating: 4.8,
-      reviewCount: 173,
-      hourlyRate: 420000,
-      distanceFromCenter: 2.1,
-      workingCity: baseCity,
-      isAvailable: true,
-      availability: {},
-      languages: ['vi'],
-      certifications: ['Hot Stone'],
-      createdAt: now,
-    },
-    {
-      id: 'mock-therapist-3',
-      name: 'Thảo Vy',
-      phoneNumber: '0901000003',
-      email: 'thaovy.mock@zena.vn',
-      gender: 'female',
-      avatar: 'https://i.pravatar.cc/300?img=44',
-      bio: 'Phong cách trị liệu nhẹ nhàng, chăm sóc toàn thân.',
-      bioEn: 'Soft therapeutic style with full body care.',
-      specialties: ['Massage Foot', 'Aromatherapy'],
-      experience: 4,
-      rating: 4.7,
-      reviewCount: 94,
-      hourlyRate: 360000,
-      distanceFromCenter: 0.9,
-      workingCity: baseCity,
-      isAvailable: true,
-      availability: {},
-      languages: ['vi', 'en'],
-      certifications: ['Aromatherapy'],
-      createdAt: now,
-    },
-    {
-      id: 'mock-therapist-4',
-      name: 'Mỹ Duyên',
-      phoneNumber: '0901000004',
-      email: 'myduyen.mock@zena.vn',
-      gender: 'female',
-      avatar: 'https://i.pravatar.cc/300?img=49',
-      bio: 'KTV thân thiện, phù hợp khách hàng mới trải nghiệm.',
-      bioEn: 'Friendly therapist, ideal for first-time customers.',
-      specialties: ['Massage Thư Giãn', 'Massage Body'],
-      experience: 3,
-      rating: 4.8,
-      reviewCount: 81,
-      hourlyRate: 340000,
-      distanceFromCenter: 3.0,
-      workingCity: baseCity,
-      isAvailable: true,
-      availability: {},
-      languages: ['vi'],
-      certifications: ['Body Massage'],
-      createdAt: now,
-    },
-  ];
-}
-
-function hasTherapistInCity(items: Therapist[], city: string): boolean {
-  const target = city.trim().toLowerCase();
-  if (!target) return items.length > 0;
-  return items.some((item) => (item.workingCity || '').trim().toLowerCase() === target);
-}
-
 export default function HomeScreen() {
-  const { width: screenWidth } = useWindowDimensions();
+  const { width: screenWidth, height: windowHeight } = useWindowDimensions();
   const tabletLayout = useTabletLayout();
   const insets = useSafeAreaInsets();
   const { language } = useLanguage();
-  const { user, setUser } = useUser();
+  const { user, setUser, isLoading: authLoading } = useUser();
   const { activeBooking } = useActiveBooking();
   const router = useRouter();
+
+  const promptSignIn = useCallback(() => {
+    Alert.alert(
+      language === 'en' ? 'Sign in required' : 'Cần đăng nhập',
+      language === 'en'
+        ? 'Please sign in to use this feature.'
+        : 'Vui lòng đăng nhập để sử dụng tính năng này.',
+      [
+        { text: language === 'en' ? 'Cancel' : 'Huỷ', style: 'cancel' },
+        {
+          text: language === 'en' ? 'Sign in' : 'Đăng nhập',
+          onPress: () => router.push('/(tabs)/account'),
+        },
+      ],
+    );
+  }, [language, router]);
+
+  const requireAuthTo = useCallback(
+    (fn: () => void) => {
+      if (authLoading) return;
+      if (!canUseAppFeatures(user)) {
+        promptSignIn();
+        return;
+      }
+      fn();
+    },
+    [user, authLoading, promptSignIn],
+  );
+
   const [showTherapistModal, setShowTherapistModal] = useState(false);
   const [showMassageHome, setShowMassageHome] = useState(false);
+  const [selectedHomeService, setSelectedHomeService] = useState<string | null>(null);
   const [showMassageLocation, setShowMassageLocation] = useState(false);
   const [showPromotions, setShowPromotions] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [showChat, setShowChat] = useState(false);
   const [showTopUp, setShowTopUp] = useState(false);
   const [showWallet, setShowWallet] = useState(false);
-  const [showCityPicker, setShowCityPicker] = useState(false);
-  const [cityQuery, setCityQuery] = useState('');
+  const [autoLocateDone, setAutoLocateDone] = useState(false);
+  const [homeSlideIndex, setHomeSlideIndex] = useState(0);
+  const [homeBannerWidth, setHomeBannerWidth] = useState(0);
+  const homePromoScrollRef = React.useRef<ScrollView | null>(null);
   const { unreadCount: unreadNotifCount, refreshUnreadCount } = useNotifications();
   const [therapists, setTherapists] = useState<Therapist[]>([]);
   const [featuredTherapists, setFeaturedTherapists] = useState<Therapist[]>([]);
+  const [therapistImageFallbackStep, setTherapistImageFallbackStep] = useState<Record<string, number>>({});
   const [loadingFeatured, setLoadingFeatured] = useState(true);
   const [loadingTherapists, setLoadingTherapists] = useState(false);
   const [balance, setBalance] = useState(0);
   const isVipMember = !!user?.isVipMember;
-  const [selectedCity, setSelectedCity] = useState(user?.selectedCity || user?.workingCity || DEFAULT_CITY);
+  const [selectedCity, setSelectedCity] = useState(
+    () => user?.selectedCity || user?.workingCity || '',
+  );
+  const [customerLocation, setCustomerLocation] = useState<{ latitude: number; longitude: number } | null>(null);
 
   const strings = useMemo(() => {
     return translations[language] ?? translations.vi;
   }, [language]);
-  const contentMaxWidth = tabletLayout.isTablet ? 980 : screenWidth;
+  const openMassageHomeWithService = useCallback((service?: string | null) => {
+    setSelectedHomeService(service ?? null);
+    setShowMassageHome(true);
+  }, []);
+
+  const withLiveDistance = useCallback(
+    (list: Therapist[]) => applyCustomerDistanceToTherapists(list, customerLocation),
+    [customerLocation],
+  );
+  const contentColumnMax = tabletLayout.isTablet ? 1040 : screenWidth;
+  const contentMaxWidth = contentColumnMax;
   const contentHorizontalPadding = tabletLayout.horizontalPadding;
-  const contentHorizontalInset = tabletLayout.isTablet ? contentHorizontalPadding : 8;
-  const contentAreaWidth = Math.min(screenWidth - contentHorizontalPadding * 2, contentMaxWidth);
+  const contentHorizontalInset = tabletLayout.isTablet ? contentHorizontalPadding : 12;
+  const contentAreaWidth = tabletLayout.isTablet
+    ? Math.min(screenWidth, contentColumnMax) - contentHorizontalInset * 2
+    : Math.min(screenWidth - contentHorizontalPadding * 2, contentColumnMax);
   const gridGap = tabletLayout.isTablet ? 16 : 12;
-  const gridHeight = tabletLayout.isTablet ? 260 : 210;
+  const gridHeight = tabletLayout.isTablet ? 288 : 210;
   const rightColumnWidth = tabletLayout.isTablet
     ? Math.max(180, contentAreaWidth * 0.38)
     : Math.max(140, (screenWidth - 44) * 0.42);
-  const featuredCardWidth = tabletLayout.isTablet ? 176 : 140;
+  const featuredColumns = tabletLayout.isTablet ? (contentAreaWidth >= 840 ? 5 : 4) : 1;
+  const featuredGridCardWidth =
+    tabletLayout.isTablet && featuredColumns > 0
+      ? Math.max(
+          152,
+          Math.floor((contentAreaWidth - gridGap * (featuredColumns - 1)) / featuredColumns),
+        )
+      : 140;
+  const phoneFeaturedCardWidth = 156;
   const cardImageResizeMode = tabletLayout.isTablet ? 'contain' : 'cover';
+  const featuredAvatarSize = tabletLayout.isTablet ? 76 : 68;
+  // Keep just enough breathing room above the tab bar; avoid large blank tail space.
+  const bottomContentSpacer = tabletLayout.isTablet ? 20 : Math.max(12, insets.bottom + 8);
+
+  /** Promo strip: wider aspect + max height so it does not dominate the scroll area */
+  const homePromoBannerHeight = Math.round(
+    Math.min(screenWidth / 2.35, windowHeight * 0.18, tabletLayout.isTablet ? 220 : 200),
+  );
+  const resolvedHomeBannerWidth = homeBannerWidth > 0 ? homeBannerWidth : Math.round(screenWidth * 0.96);
+  const homeSlides = useMemo(
+    () => ([
+      require('@/assets/images/home-slide-1.jpg'),
+      require('@/assets/images/home-slide-2.jpg'),
+      require('@/assets/images/home-slide-3.jpg'),
+    ]),
+    [],
+  );
 
   useEffect(() => {
-    if (user?.selectedCity && user.selectedCity !== selectedCity) {
-      setSelectedCity(user.selectedCity);
+    if (homeSlides.length <= 1 || resolvedHomeBannerWidth <= 0) return;
+
+    const timer = setInterval(() => {
+      setHomeSlideIndex((prev) => {
+        const next = (prev + 1) % homeSlides.length;
+        homePromoScrollRef.current?.scrollTo({
+          x: next * resolvedHomeBannerWidth,
+          animated: true,
+        });
+        return next;
+      });
+    }, HOME_PROMO_AUTOPLAY_MS);
+
+    return () => clearInterval(timer);
+  }, [homeSlides.length, resolvedHomeBannerWidth]);
+
+  useEffect(() => {
+    const fromProfile = user?.selectedCity || user?.workingCity;
+    if (fromProfile) {
+      setSelectedCity(fromProfile);
     }
-  }, [user?.selectedCity, selectedCity]);
+  }, [user?.selectedCity, user?.workingCity]);
+
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      void (async () => {
+        const reopen = await consumeReopenMassageAfterRegion();
+        if (!cancelled && reopen) {
+          setShowMassageHome(true);
+        }
+        const fromProfile = user?.selectedCity || user?.workingCity;
+        if (fromProfile) {
+          return;
+        }
+        const stored = await loadPersistedHomeSelectedCity();
+        if (!cancelled && stored) {
+          setSelectedCity(stored);
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }, [user?.selectedCity, user?.workingCity]),
+  );
+
+  const didInitialProvinceGps = React.useRef(false);
+  useEffect(() => {
+    if (authLoading || didInitialProvinceGps.current) {
+      return;
+    }
+    const fromProfile = user?.selectedCity || user?.workingCity;
+    if (fromProfile) {
+      didInitialProvinceGps.current = true;
+      setAutoLocateDone(true);
+      return;
+    }
+    didInitialProvinceGps.current = true;
+    const snapshotUser = user;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const stored = await loadPersistedHomeSelectedCity();
+        if (cancelled) {
+          return;
+        }
+        if (stored) {
+          setSelectedCity(stored);
+          return;
+        }
+        const coords = await refreshCustomerLocation({ askPermissionIfNeeded: false });
+        const inferred = coords ? await inferVietnamProvinceFromCoordinates(coords) : null;
+        if (cancelled) {
+          return;
+        }
+        if (inferred) {
+          setSelectedCity(inferred);
+          await persistHomeSelectedCity(inferred);
+          if (snapshotUser && canUseAppFeatures(snapshotUser)) {
+            await setUser({ ...snapshotUser, selectedCity: inferred });
+          }
+        }
+      } finally {
+        if (!cancelled) {
+          setAutoLocateDone(true);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [authLoading, user, setUser]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      // Lấy GPS thật để hiện distance chính xác. Nếu permission chưa cấp,
+      // AppLocationBootstrap đã chặn UI — chỗ này dùng `true` để re-prompt
+      // ngay khi permission còn `undetermined`.
+      const live = await refreshCustomerLocation({ askPermissionIfNeeded: true });
+      const fallback = live ?? (await getStoredCustomerLocation());
+      if (!cancelled && fallback) {
+        setCustomerLocation(fallback);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!customerLocation) return;
+    setTherapists((prev) => withLiveDistance(prev));
+    setFeaturedTherapists((prev) => withLiveDistance(prev));
+  }, [customerLocation, withLiveDistance]);
 
   const resolveTherapistCity = (item: Therapist) => {
     if (item.workingCity?.trim()) {
@@ -284,11 +408,6 @@ export default function HomeScreen() {
     const hash = item.id.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0);
     return VIETNAM_PROVINCES[hash % VIETNAM_PROVINCES.length];
   };
-
-  const filteredCities = useMemo(
-    () => VIETNAM_PROVINCES.filter((city) => city.toLowerCase().includes(cityQuery.trim().toLowerCase())),
-    [cityQuery],
-  );
 
   // Load wallet balance
   const loadWalletBalance = useCallback(() => {
@@ -302,48 +421,55 @@ export default function HomeScreen() {
 
 
 
-  // Load featured therapists after transitions — avoids stacking network work right when tabs appear after login
+  // Load featured therapists sau khi idle — tránh chồng tác vụ ngay lúc chuyển cảnh (thay InteractionManager deprecated)
   useEffect(() => {
     let cancelled = false;
-    const task = InteractionManager.runAfterInteractions(() => {
-      (async () => {
+    const task = scheduleNonBlockingWork(() => {
+      void (async () => {
         try {
-          const data = await getTherapists();
+          const data = await getTherapists({ bypassCache: true });
           if (cancelled) return;
-          let source = data;
-          if (isTestMode) {
-            if (source.length === 0) {
-              source = buildMockFeaturedTherapists(selectedCity);
-            } else if (!hasTherapistInCity(source, selectedCity)) {
-              source = [...source, ...buildMockFeaturedTherapists(selectedCity)];
-            }
-          }
-          const sorted = [...source].sort((a, b) => b.rating - a.rating);
+          const sorted = [...withLiveDistance(data)].sort((a, b) => {
+            if (a.isAvailable !== b.isAvailable) return a.isAvailable ? -1 : 1;
+            return b.rating - a.rating;
+          });
           setFeaturedTherapists(sorted);
         } catch {
           if (!cancelled) {
-            setFeaturedTherapists(isTestMode ? buildMockFeaturedTherapists(selectedCity) : []);
+            setFeaturedTherapists([]);
           }
         } finally {
           if (!cancelled) setLoadingFeatured(false);
         }
       })();
-    });
+    }, 600);
     return () => {
       cancelled = true;
-      task.cancel?.();
+      task.cancel();
     };
-  }, [selectedCity]);
+  }, [selectedCity, withLiveDistance]);
 
   const handleSelectCity = async (city: string) => {
     setSelectedCity(city);
-    setShowCityPicker(false);
-    if (user) {
+    await persistHomeSelectedCity(city);
+    if (user && canUseAppFeatures(user)) {
       await setUser({ ...user, selectedCity: city });
     }
   };
 
+  const openSelectRegion = useCallback(() => {
+    router.push({
+      pathname: '/select-region',
+      params: { current: selectedCity || '' },
+    });
+  }, [router, selectedCity]);
+
   const handleOpenTherapists = async () => {
+    if (authLoading) return;
+    if (!canUseAppFeatures(user)) {
+      promptSignIn();
+      return;
+    }
     setShowTherapistModal(true);
 
     if (therapists.length > 0 || loadingTherapists) {
@@ -352,43 +478,65 @@ export default function HomeScreen() {
 
     try {
       setLoadingTherapists(true);
-      const data = await getTherapists();
-      let source = data;
-      if (isTestMode) {
-        if (source.length === 0) {
-          source = buildMockFeaturedTherapists(selectedCity);
-        } else if (!hasTherapistInCity(source, selectedCity)) {
-          source = [...source, ...buildMockFeaturedTherapists(selectedCity)];
-        }
-      }
-      setTherapists(source);
+      const data = await getTherapists({ bypassCache: true });
+      const live = withLiveDistance(data);
+      live.sort((a, b) => {
+        if (a.isAvailable !== b.isAvailable) return a.isAvailable ? -1 : 1;
+        const da = Number.isFinite(a.distanceFromCenter) ? a.distanceFromCenter : Number.POSITIVE_INFINITY;
+        const db = Number.isFinite(b.distanceFromCenter) ? b.distanceFromCenter : Number.POSITIVE_INFINITY;
+        if (da === db) return 0;
+        return da < db ? -1 : 1;
+      });
+      setTherapists(live);
     } catch (error) {
       console.error('Error loading therapists from home:', error);
-      setTherapists(isTestMode ? buildMockFeaturedTherapists(selectedCity) : []);
+      setTherapists([]);
     } finally {
       setLoadingTherapists(false);
     }
   };
 
   const renderTherapistCard = ({ item }: { item: Therapist }) => {
-    const distanceText = item.distanceFromCenter < 1
-      ? `${Math.round(item.distanceFromCenter * 1000)}m`
-      : `${item.distanceFromCenter} km`;
+    const candidates = therapistDisplayImageCandidates(item);
+    const attempt = therapistImageFallbackStep[item.id] ?? 0;
+    const displayUri = candidates[attempt] ?? '';
+    const hasImageAvatar = attempt < candidates.length && !!displayUri;
+    const distanceText = formatDistanceLabel(item.distanceFromCenter, strings.distanceUpdating);
 
     return (
       <TouchableOpacity style={styles.therapistCard} activeOpacity={0.85}>
         <View style={styles.therapistAvatar}>
-          {item.avatar?.startsWith('http') ? (
-            <Image source={{ uri: item.avatar }} style={styles.therapistAvatarImage} />
+          {hasImageAvatar ? (
+            <Image
+              source={{ uri: displayUri }}
+              style={styles.therapistAvatarImage}
+              onError={() =>
+                setTherapistImageFallbackStep((prev) => ({
+                  ...prev,
+                  [item.id]: (prev[item.id] ?? 0) + 1,
+                }))
+              }
+            />
           ) : (
-            <Text style={styles.therapistAvatarText}>{item.gender === 'female' ? '👩' : '👨'}</Text>
+            <Feather name="user" size={24} color={AppColors.primaryDark} />
           )}
         </View>
         <View style={styles.therapistInfo}>
           <Text style={styles.therapistName}>{item.name}</Text>
-          <Text style={styles.therapistMeta}>⭐ {item.rating.toFixed(1)} • {item.reviewCount} {strings.reviews}</Text>
-          <Text style={styles.therapistMeta}>📍 {distanceText} • {item.experience} {strings.yearsExp}</Text>
-          {isVipMember ? <Text style={styles.therapistMeta}>🎂 {strings.age}: {estimateAge(item)}</Text> : null}
+          <View style={styles.therapistMetaRow}>
+            <Feather name="star" size={11} color="#F59E0B" />
+            <Text style={styles.therapistMeta}>{item.rating.toFixed(1)} • {item.reviewCount} {strings.reviews}</Text>
+          </View>
+          <View style={styles.therapistMetaRow}>
+            <Feather name="map-pin" size={11} color={COLORS.lightText} />
+            <Text style={styles.therapistMeta}>{distanceText} • {item.experience} {strings.yearsExp}</Text>
+          </View>
+          {isVipMember ? (
+            <View style={styles.therapistMetaRow}>
+              <Feather name="calendar" size={11} color={COLORS.lightText} />
+              <Text style={styles.therapistMeta}>{strings.age}: {estimateAge(item)}</Text>
+            </View>
+          ) : null}
           <View style={styles.therapistFooter}>
             <View style={styles.availableBadge}>
               <View style={styles.availableDot} />
@@ -404,75 +552,112 @@ export default function HomeScreen() {
     );
   };
 
-  const cityFeaturedTherapists = useMemo(
-    () => featuredTherapists.filter((item) => resolveTherapistCity(item) === selectedCity),
-    [featuredTherapists, selectedCity],
-  );
+  const cityFeaturedTherapists = useMemo(() => {
+    if (!selectedCity) return [];
+    const list = featuredTherapists.filter((item) => resolveTherapistCity(item) === selectedCity);
+    return [...list].sort((a, b) => {
+      if (a.isAvailable !== b.isAvailable) return a.isAvailable ? -1 : 1;
+      return b.rating - a.rating;
+    });
+  }, [featuredTherapists, selectedCity]);
 
-  const visibleFeaturedTherapists = useMemo(
-    () => cityFeaturedTherapists.slice(0, isVipMember ? 10 : 5),
-    [cityFeaturedTherapists, isVipMember],
-  );
+  const visibleFeaturedTherapists = useMemo(() => {
+    const capTablet = isVipMember ? 12 : 8;
+    const capPhone = isVipMember ? 10 : 5;
+    const cap = tabletLayout.isTablet ? capTablet : capPhone;
+    return cityFeaturedTherapists.slice(0, cap);
+  }, [cityFeaturedTherapists, isVipMember, tabletLayout.isTablet]);
 
   const visibleTherapists = useMemo(
     () => {
-      const byCity = therapists.filter((item) => resolveTherapistCity(item) === selectedCity);
+      if (!selectedCity) {
+        return [];
+      }
+      const byCity = therapists
+        .filter((item) => resolveTherapistCity(item) === selectedCity)
+        .sort((a, b) => {
+          if (a.isAvailable !== b.isAvailable) return a.isAvailable ? -1 : 1;
+          const da = Number.isFinite(a.distanceFromCenter) ? a.distanceFromCenter : Number.POSITIVE_INFINITY;
+          const db = Number.isFinite(b.distanceFromCenter) ? b.distanceFromCenter : Number.POSITIVE_INFINITY;
+          if (da === db) return 0;
+          return da < db ? -1 : 1;
+        });
       return isVipMember ? byCity : byCity.slice(0, 6);
     },
     [therapists, isVipMember, selectedCity],
   );
 
   return (
-    <SafeAreaView style={styles.container} edges={['bottom']}>
+    <SafeAreaView style={styles.container} edges={['left', 'right', 'bottom']}>
       <StatusBar barStyle="light-content" backgroundColor={COLORS.primary} translucent />
 
       {/* Khối đỏ bọc đầu (full-bleed), bo góc đáy — đồng bộ app dịch vụ */}
       <View style={[styles.heroBlue, { paddingTop: Math.max(insets.top, 10) + 8 }]}>
-        <View style={[styles.pageMax, { maxWidth: contentMaxWidth, paddingHorizontal: contentHorizontalInset }]}>
+          <View
+            style={[
+              styles.pageMax,
+              {
+                maxWidth: contentMaxWidth,
+                paddingHorizontal: contentHorizontalInset,
+              },
+            ]}
+          >
         <View style={styles.headerBar}>
           <View style={styles.headerLeft}>
-            <TouchableOpacity style={styles.avatarPlaceholder} onPress={() => router.push('/account')}>
-              <Text style={styles.avatarIcon}>👤</Text>
+            <TouchableOpacity style={styles.avatarPlaceholder} onPress={() => router.push('/(tabs)/account')}>
+              <Feather name="user" size={18} color="#FFFFFF" />
             </TouchableOpacity>
             <View>
-              <TouchableOpacity style={styles.locationRow} onPress={() => setShowCityPicker(true)}>
-                <Text style={styles.locationText}>{selectedCity}</Text>
+              <TouchableOpacity style={styles.locationRow} onPress={openSelectRegion}>
+                <Text style={styles.locationText} numberOfLines={1}>
+                  {selectedCity ||
+                    (autoLocateDone ? strings.pickRegion : strings.detectingRegion)}
+                </Text>
                 <Text style={styles.locationArrow}>▾</Text>
               </TouchableOpacity>
             </View>
           </View>
           <View style={styles.headerRight}>
-            <TouchableOpacity style={styles.headerIconBtn} onPress={() => setShowNotifications(true)}>
-              <Text style={styles.headerIcon}>🔔</Text>
+            <TouchableOpacity style={styles.headerIconBtn} onPress={() => requireAuthTo(() => setShowNotifications(true))}>
+              <Feather name="bell" size={17} color="#FFFFFF" />
               {unreadNotifCount > 0 && (
                 <View style={styles.notifBadge}>
                   <Text style={styles.notifBadgeText}>{unreadNotifCount > 9 ? '9+' : unreadNotifCount}</Text>
                 </View>
               )}
             </TouchableOpacity>
-            <TouchableOpacity style={styles.headerIconBtn} onPress={() => setShowChat(true)}>
-              <Text style={styles.headerIcon}>💬</Text>
+            <TouchableOpacity style={styles.headerIconBtn} onPress={() => requireAuthTo(() => setShowChat(true))}>
+              <Feather name="message-circle" size={17} color="#FFFFFF" />
             </TouchableOpacity>
           </View>
         </View>
         </View>
       </View>
 
-      {user ? (
+      {canUseAppFeatures(user) ? (
         <View style={[styles.pageMax, { maxWidth: contentMaxWidth }]}>
-        <View style={[styles.balanceOuter, { marginHorizontal: contentHorizontalInset }]}>
-          <View style={styles.balanceSection}>
+        <View
+          style={[
+            styles.balanceOuter,
+            {
+              marginHorizontal: contentHorizontalInset,
+            },
+          ]}
+        >
+          <View style={[styles.balanceSection, tabletLayout.isTablet && styles.balanceSectionTablet]}>
             <View style={styles.balanceLeft}>
               <TouchableOpacity style={styles.balanceLabelRow} onPress={() => setShowWallet(true)}>
-                <Text style={styles.balanceLabel}>{strings.balanceLabel}</Text>
+                <Text style={[styles.balanceLabel, tabletLayout.isTablet && styles.balanceLabelTablet]}>
+                  {strings.balanceLabel}
+                </Text>
                 <Text style={styles.balanceChevron}>›</Text>
               </TouchableOpacity>
-              <Text style={styles.balanceAmount}>
+              <Text style={[styles.balanceAmount, tabletLayout.isTablet && styles.balanceAmountTablet]}>
                 {balance.toLocaleString()} {strings.currency}
               </Text>
             </View>
-            <TouchableOpacity style={styles.topUpButton} onPress={() => setShowTopUp(true)}>
-              <Text style={styles.topUpText}>{strings.topUp}</Text>
+            <TouchableOpacity style={[styles.topUpButton, tabletLayout.isTablet && styles.topUpButtonTablet]} onPress={() => setShowTopUp(true)}>
+              <Text style={[styles.topUpText, tabletLayout.isTablet && styles.topUpTextTablet]}>{strings.topUp}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -480,8 +665,14 @@ export default function HomeScreen() {
       ) : null}
 
       <ScrollView
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[
+          styles.scrollContent,
+          tabletLayout.isTablet && styles.scrollContentTablet,
+        ]}
         showsVerticalScrollIndicator={false}
+        bounces={false}
+        alwaysBounceVertical={false}
+        overScrollMode="never"
       >
         <View style={[styles.pageMax, { maxWidth: contentMaxWidth, paddingHorizontal: contentHorizontalInset }]}>
         {/* Connected Therapist Banner */}
@@ -492,22 +683,24 @@ export default function HomeScreen() {
               <Text style={styles.connectedName}>{activeBooking.therapist.name}</Text>
               <Text style={styles.connectedStatus}>{language === 'en' ? 'Connected' : 'Đã kết nối'}</Text>
             </View>
-            <TouchableOpacity style={styles.connectedMsgBtn} onPress={() => setShowChat(true)}>
-              <Text style={styles.connectedMsgIcon}>💬</Text>
+            <TouchableOpacity style={styles.connectedMsgBtn} onPress={() => requireAuthTo(() => setShowChat(true))}>
+              <Feather name="message-circle" size={17} color={AppColors.primaryDark} />
             </TouchableOpacity>
-            <TouchableOpacity style={styles.connectedDetailBtn} onPress={() => setShowChat(true)}>
-              <Text style={styles.connectedDetailIcon}>↗</Text>
+            <TouchableOpacity style={styles.connectedDetailBtn} onPress={() => requireAuthTo(() => setShowChat(true))}>
+              <Feather name="external-link" size={15} color="#666" />
             </TouchableOpacity>
           </View>
         )}
 
         {/* Quick Actions Grid */}
         <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>{strings.services}</Text>
+          <Text style={[styles.sectionTitle, tabletLayout.isTablet && styles.sectionTitleTablet]}>
+            {strings.services}
+          </Text>
         </View>
         <View style={[styles.gridContainer, tabletLayout.isTablet && { height: gridHeight, gap: gridGap }]}>
           {/* Large card — Massage tại nhà */}
-          <TouchableOpacity style={styles.gridCardLarge} activeOpacity={0.85} onPress={() => setShowMassageHome(true)}>
+          <TouchableOpacity style={styles.gridCardLarge} activeOpacity={0.85} onPress={() => requireAuthTo(() => openMassageHomeWithService(null))}>
             <Image
               source={require('@/assets/images/massage-home-banner.png')}
               style={{ width: '100%', height: '100%' }}
@@ -525,7 +718,7 @@ export default function HomeScreen() {
             <TouchableOpacity
               style={tabletLayout.isTablet ? styles.gridCardSmallImgTablet : styles.gridCardSmallImg}
               activeOpacity={0.85}
-              onPress={() => setShowMassageLocation(true)}
+              onPress={() => requireAuthTo(() => setShowMassageLocation(true))}
             >
               <Image
                 source={require('@/assets/images/promo-location-banner.png')}
@@ -534,11 +727,13 @@ export default function HomeScreen() {
               />
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.gridCardSmall} activeOpacity={0.85} onPress={() => setShowPromotions(true)}>
+            <TouchableOpacity style={styles.gridCardSmall} activeOpacity={0.85} onPress={() => requireAuthTo(() => setShowPromotions(true))}>
               <View style={[styles.gridCardBg, { backgroundColor: COLORS.primary }]}>
                 <View style={[styles.gridDeco, { width: 80, height: 80, bottom: -20, left: -10 }]} />
                 <View style={styles.gridCardContent}>
-                  <Text style={styles.gridEmojiSmall}>🎁</Text>
+                  <View style={styles.gridIconBadge}>
+                    <Feather name="gift" size={18} color="#FFFFFF" />
+                  </View>
                   <Text style={styles.gridTitleSmall}>{strings.offers}</Text>
                   <Text style={styles.gridDescSmall}>{strings.upTo50}</Text>
                 </View>
@@ -550,18 +745,77 @@ export default function HomeScreen() {
         {/* Quick service tags */}
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tagsRow} contentContainerStyle={styles.tagsContent}>
           {getHomeServiceTags().map((tag) => (
-            <TouchableOpacity key={tag.label} style={styles.tagChip} activeOpacity={1} onPress={() => setShowMassageHome(true)}>
-              <Text style={styles.tagEmoji}>{tag.emoji}</Text>
-              <Text style={styles.tagLabel}>{tag.label}</Text>
+            <TouchableOpacity
+              key={tag.label}
+              style={[styles.tagChip, tabletLayout.isTablet && styles.tagChipTablet]}
+              activeOpacity={1}
+              onPress={() => requireAuthTo(() => openMassageHomeWithService(tag.label))}
+            >
+              <Feather
+                name={tag.iconName}
+                size={tabletLayout.isTablet ? 16 : 14}
+                color={AppColors.primaryDark}
+              />
+              <Text style={[styles.tagLabel, tabletLayout.isTablet && styles.tagLabelTablet]}>{tag.label}</Text>
             </TouchableOpacity>
           ))}
         </ScrollView>
 
+        <View
+          style={[styles.homePromoBannerWrap, tabletLayout.isTablet && styles.homePromoBannerWrapTablet]}
+          onLayout={(event) => {
+            const width = Math.round(event.nativeEvent.layout.width);
+            if (width > 0 && width !== homeBannerWidth) {
+              setHomeBannerWidth(width);
+            }
+          }}
+        >
+          <ScrollView
+            ref={homePromoScrollRef}
+            horizontal
+            pagingEnabled
+            showsHorizontalScrollIndicator={false}
+            bounces={false}
+            onMomentumScrollEnd={(event) => {
+              const pageWidth = event.nativeEvent.layoutMeasurement.width || 1;
+              const next = Math.round(event.nativeEvent.contentOffset.x / pageWidth);
+              setHomeSlideIndex(Math.max(0, Math.min(next, homeSlides.length - 1)));
+            }}
+          >
+            {homeSlides.map((src, idx) => (
+              <TouchableOpacity
+                key={`home-slide-${idx}`}
+                style={[styles.homePromoSlide, { width: resolvedHomeBannerWidth }]}
+                activeOpacity={0.92}
+                onPress={() => requireAuthTo(() => openMassageHomeWithService(null))}
+              >
+                <Image
+                  source={src}
+                  style={[styles.homePromoBannerImage, { width: resolvedHomeBannerWidth, height: homePromoBannerHeight }]}
+                  resizeMode="cover"
+                />
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+          <View style={styles.homePromoDots}>
+            {homeSlides.map((_, idx) => (
+              <View
+                key={`home-dot-${idx}`}
+                style={[styles.homePromoDot, idx === homeSlideIndex && styles.homePromoDotActive]}
+              />
+            ))}
+          </View>
+        </View>
+
         {/* Featured Therapists */}
         <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>{strings.featuredTherapists}</Text>
+          <Text style={[styles.sectionTitle, tabletLayout.isTablet && styles.sectionTitleTablet]}>
+            {strings.featuredTherapists}
+          </Text>
           <TouchableOpacity onPress={handleOpenTherapists}>
-            <Text style={styles.seeAllLink}>{strings.seeAll} ›</Text>
+            <Text style={[styles.seeAllLink, tabletLayout.isTablet && styles.seeAllLinkTablet]}>
+              {strings.seeAll} ›
+            </Text>
           </TouchableOpacity>
         </View>
 
@@ -571,7 +825,81 @@ export default function HomeScreen() {
           </View>
         ) : visibleFeaturedTherapists.length === 0 ? (
           <View style={styles.featuredEmpty}>
-            <Text style={styles.therapistEmptyText}>{strings.noTherapistsInCity}</Text>
+            <Text style={styles.therapistEmptyText}>
+              {!selectedCity ? strings.selectRegionHint : strings.noTherapistsInCity}
+            </Text>
+          </View>
+        ) : tabletLayout.isTablet ? (
+          <View style={[styles.featuredGrid, { gap: gridGap }]}>
+            {visibleFeaturedTherapists.map((t) => {
+              const candidates = therapistDisplayImageCandidates(t);
+              const attempt = therapistImageFallbackStep[t.id] ?? 0;
+              const displayUri = candidates[attempt] ?? '';
+              const hasImageAvatar = attempt < candidates.length && !!displayUri;
+              const distText = formatDistanceLabel(t.distanceFromCenter, strings.distanceUpdating);
+              const avRadius = featuredAvatarSize / 2;
+              return (
+                <TouchableOpacity
+                  key={t.id}
+                  style={[styles.featuredCard, styles.featuredCardTablet, { width: featuredGridCardWidth }]}
+                  activeOpacity={0.85}
+                  onPress={() => requireAuthTo(() => openMassageHomeWithService(t.specialties?.[0] ?? null))}
+                >
+                  <View style={styles.featuredAvatarWrap}>
+                    <View
+                      style={[
+                        styles.featuredAvatar,
+                        { width: featuredAvatarSize, height: featuredAvatarSize, borderRadius: avRadius },
+                      ]}
+                    >
+                      {hasImageAvatar ? (
+                        <Image
+                          source={{ uri: displayUri }}
+                          style={[
+                            styles.featuredAvatarImage,
+                            { borderRadius: avRadius },
+                          ]}
+                          onError={() =>
+                            setTherapistImageFallbackStep((prev) => ({
+                              ...prev,
+                              [t.id]: (prev[t.id] ?? 0) + 1,
+                            }))
+                          }
+                        />
+                      ) : (
+                        <Feather
+                          name="user"
+                          size={tabletLayout.isTablet ? 34 : 28}
+                          color={AppColors.primaryDark}
+                        />
+                      )}
+                    </View>
+                    {t.rating >= 4.8 && (
+                      <View style={styles.featuredBadge}>
+                        <Feather name="award" size={11} color="#D97706" />
+                      </View>
+                    )}
+                  </View>
+                  <Text style={[styles.featuredName, styles.featuredNameTablet]} numberOfLines={1}>
+                    {t.name}
+                  </Text>
+                  <View style={styles.featuredRatingRow}>
+                    <Feather name="star" size={12} color="#F59E0B" />
+                    <Text style={[styles.featuredRating, styles.featuredRatingTablet]}>{t.rating.toFixed(1)}</Text>
+                    <Text style={[styles.featuredReviews, styles.featuredReviewsTablet]}>({t.reviewCount})</Text>
+                  </View>
+                  <View style={styles.featuredDistanceRow}>
+                    <Feather name="map-pin" size={11} color={COLORS.lightText} />
+                    <Text style={[styles.featuredDistance, styles.featuredDistanceTablet]}>{distText}</Text>
+                  </View>
+                  <View style={[styles.featuredSpecialty, styles.featuredSpecialtyTablet]}>
+                    <Text style={[styles.featuredSpecialtyText, styles.featuredSpecialtyTextTablet]} numberOfLines={1}>
+                      {t.specialties?.[0] ?? 'Massage'}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
           </View>
         ) : (
           <ScrollView
@@ -580,41 +908,55 @@ export default function HomeScreen() {
             contentContainerStyle={[styles.featuredScrollContent, { gap: gridGap }]}
           >
             {visibleFeaturedTherapists.map((t) => {
-              const distText = t.distanceFromCenter < 1
-                ? `${Math.round(t.distanceFromCenter * 1000)}m`
-                : `${t.distanceFromCenter} km`;
+              const candidates = therapistDisplayImageCandidates(t);
+              const attempt = therapistImageFallbackStep[t.id] ?? 0;
+              const displayUri = candidates[attempt] ?? '';
+              const hasImageAvatar = attempt < candidates.length && !!displayUri;
+              const distText = formatDistanceLabel(t.distanceFromCenter, strings.distanceUpdating);
               return (
                 <TouchableOpacity
                   key={t.id}
-                  style={[styles.featuredCard, { width: featuredCardWidth }]}
+                  style={[styles.featuredCard, { width: phoneFeaturedCardWidth }]}
                   activeOpacity={0.85}
-                  onPress={() => setShowMassageHome(true)}
+                  onPress={() => requireAuthTo(() => openMassageHomeWithService(t.specialties?.[0] ?? null))}
                 >
                   <View style={styles.featuredAvatarWrap}>
                     <View style={styles.featuredAvatar}>
-                      {t.avatar?.startsWith('http') ? (
-                        <Image source={{ uri: t.avatar }} style={styles.featuredAvatarImage} />
+                      {hasImageAvatar ? (
+                        <Image
+                          source={{ uri: displayUri }}
+                          style={styles.featuredAvatarImage}
+                          onError={() =>
+                            setTherapistImageFallbackStep((prev) => ({
+                              ...prev,
+                              [t.id]: (prev[t.id] ?? 0) + 1,
+                            }))
+                          }
+                        />
                       ) : (
-                        <Text style={styles.featuredAvatarText}>
-                          {t.gender === 'female' ? '👩' : '👨'}
-                        </Text>
+                        <Feather name="user" size={28} color={AppColors.primaryDark} />
                       )}
                     </View>
                     {t.rating >= 4.8 && (
                       <View style={styles.featuredBadge}>
-                        <Text style={styles.featuredBadgeText}>⭐</Text>
+                        <Feather name="award" size={11} color="#D97706" />
                       </View>
                     )}
                   </View>
                   <Text style={styles.featuredName} numberOfLines={1}>{t.name}</Text>
                   <View style={styles.featuredRatingRow}>
-                    <Text style={styles.featuredStar}>⭐</Text>
+                    <Feather name="star" size={12} color="#F59E0B" />
                     <Text style={styles.featuredRating}>{t.rating.toFixed(1)}</Text>
                     <Text style={styles.featuredReviews}>({t.reviewCount})</Text>
                   </View>
-                  <Text style={styles.featuredDistance}>📍 {distText}</Text>
+                  <View style={styles.featuredDistanceRow}>
+                    <Feather name="map-pin" size={11} color={COLORS.lightText} />
+                    <Text style={styles.featuredDistance}>{distText}</Text>
+                  </View>
                   <View style={styles.featuredSpecialty}>
-                    <Text style={styles.featuredSpecialtyText} numberOfLines={1}>{t.specialties[0]}</Text>
+                    <Text style={styles.featuredSpecialtyText} numberOfLines={1}>
+                      {t.specialties?.[0] ?? 'Massage'}
+                    </Text>
                   </View>
                 </TouchableOpacity>
               );
@@ -622,55 +964,14 @@ export default function HomeScreen() {
           </ScrollView>
         )}
 
-        {/* Bottom spacer */}
-        <View style={{ height: 80 }} />
+        {/* Bottom spacer: avoid featured cards being covered by tab bar */}
+        <View style={{ height: bottomContentSpacer }} />
         </View>
       </ScrollView>
 
 
-      <Modal visible={showCityPicker} transparent animationType="slide" onRequestClose={() => setShowCityPicker(false)}>
-        <View style={styles.modalContainer}>
-          <View style={styles.cityModalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>{strings.selectCity}</Text>
-              <TouchableOpacity onPress={() => setShowCityPicker(false)}>
-                <Text style={styles.closeButton}>✕</Text>
-              </TouchableOpacity>
-            </View>
-            <View style={styles.citySearchWrap}>
-              <Text style={styles.searchIcon}>🔍</Text>
-              <TextInput
-                style={styles.citySearchInput}
-                placeholder={strings.searchCity}
-                placeholderTextColor="#999"
-                value={cityQuery}
-                onChangeText={setCityQuery}
-              />
-            </View>
-            <FlatList
-              data={filteredCities}
-              keyExtractor={(item) => item}
-              contentContainerStyle={styles.cityListContent}
-              renderItem={({ item }) => {
-                const active = item === selectedCity;
-                return (
-                  <TouchableOpacity
-                    style={[styles.cityItem, active && styles.cityItemActive]}
-                    onPress={() => handleSelectCity(item)}
-                    activeOpacity={0.85}
-                  >
-                    <Text style={[styles.cityItemText, active && styles.cityItemTextActive]}>{item}</Text>
-                    {active ? <Text style={styles.cityCheck}>✓</Text> : null}
-                  </TouchableOpacity>
-                );
-              }}
-              ListEmptyComponent={<Text style={styles.cityEmptyText}>{strings.noCityFound}</Text>}
-            />
-          </View>
-        </View>
-      </Modal>
-
       <Modal visible={showTherapistModal} transparent animationType="slide" onRequestClose={() => setShowTherapistModal(false)}>
+        <ModalSafeAreaProvider>
         <View style={styles.modalContainer}>
           <View style={styles.therapistModalContent}>
             <View style={styles.modalHeader}>
@@ -689,8 +990,10 @@ export default function HomeScreen() {
               </View>
             ) : visibleTherapists.length === 0 ? (
               <View style={styles.therapistEmptyState}>
-                <Text style={styles.therapistEmptyEmoji}>💆</Text>
-                <Text style={styles.therapistEmptyText}>{strings.noTherapistsInCity}</Text>
+                <Feather name="users" size={30} color={AppColors.primaryDark} />
+                <Text style={styles.therapistEmptyText}>
+                  {!selectedCity ? strings.selectRegionHint : strings.noTherapistsInCity}
+                </Text>
               </View>
             ) : (
               <FlatList
@@ -699,49 +1002,78 @@ export default function HomeScreen() {
                 renderItem={renderTherapistCard}
                 contentContainerStyle={styles.therapistListContent}
                 showsVerticalScrollIndicator={false}
+                initialNumToRender={8}
+                maxToRenderPerBatch={10}
+                windowSize={7}
+                removeClippedSubviews={Platform.OS === 'android'}
               />
             )}
           </View>
         </View>
+        </ModalSafeAreaProvider>
       </Modal>
 
       {/* Massage Home full-screen overlay */}
-      <Modal visible={showMassageHome} animationType="slide" onRequestClose={() => setShowMassageHome(false)}>
-        <MassageHomeScreen
-          onClose={() => setShowMassageHome(false)}
-          selectedCity={selectedCity}
-          onChangeCity={handleSelectCity}
-        />
+      <Modal
+        visible={showMassageHome}
+        animationType="slide"
+        presentationStyle="fullScreen"
+        hardwareAccelerated
+        onRequestClose={() => setShowMassageHome(false)}
+      >
+        <View style={styles.modalContentBg}>
+          <ModalSafeAreaProvider>
+            <MassageHomeScreen
+              reopenMassageAfterRegion
+              onClose={() => setShowMassageHome(false)}
+              selectedCity={selectedCity}
+              onChangeCity={handleSelectCity}
+              initialService={selectedHomeService ?? undefined}
+            />
+          </ModalSafeAreaProvider>
+        </View>
       </Modal>
 
       {/* Notification screen */}
       <Modal visible={showNotifications} animationType="slide" onRequestClose={() => setShowNotifications(false)}>
-        <NotificationScreen onClose={() => { setShowNotifications(false); refreshUnreadCount(); }} />
+        <ModalSafeAreaProvider>
+          <NotificationScreen onClose={() => { setShowNotifications(false); refreshUnreadCount(); }} />
+        </ModalSafeAreaProvider>
       </Modal>
 
       {/* Chat screen */}
       <Modal visible={showChat} animationType="slide" onRequestClose={() => setShowChat(false)}>
-        <ChatScreen onClose={() => setShowChat(false)} />
+        <ModalSafeAreaProvider>
+          <ChatScreen onClose={() => setShowChat(false)} />
+        </ModalSafeAreaProvider>
       </Modal>
 
       {/* Massage Location screen */}
       <Modal visible={showMassageLocation} animationType="slide" onRequestClose={() => setShowMassageLocation(false)}>
-        <MassageLocationScreen onClose={() => setShowMassageLocation(false)} />
+        <ModalSafeAreaProvider>
+          <MassageLocationScreen onClose={() => setShowMassageLocation(false)} />
+        </ModalSafeAreaProvider>
       </Modal>
 
       {/* Promotions screen */}
       <Modal visible={showPromotions} animationType="slide" onRequestClose={() => setShowPromotions(false)}>
-        <PromotionsScreen onClose={() => setShowPromotions(false)} />
+        <ModalSafeAreaProvider>
+          <PromotionsScreen onClose={() => setShowPromotions(false)} />
+        </ModalSafeAreaProvider>
       </Modal>
 
       {/* Top-up screen */}
       <Modal visible={showTopUp} animationType="slide" onRequestClose={() => setShowTopUp(false)}>
-        <TherapistTopUpScreen onClose={() => { setShowTopUp(false); loadWalletBalance(); }} />
+        <ModalSafeAreaProvider>
+          <TherapistTopUpScreen onClose={() => { setShowTopUp(false); loadWalletBalance(); }} />
+        </ModalSafeAreaProvider>
       </Modal>
 
       {/* Wallet screen */}
       <Modal visible={showWallet} animationType="slide" onRequestClose={() => setShowWallet(false)}>
-        <WalletScreen onClose={() => { setShowWallet(false); loadWalletBalance(); }} />
+        <ModalSafeAreaProvider>
+          <WalletScreen onClose={() => { setShowWallet(false); loadWalletBalance(); }} />
+        </ModalSafeAreaProvider>
       </Modal>
 
     </SafeAreaView>
@@ -756,6 +1088,10 @@ function estimateAge(item: Therapist) {
 
 const styles = StyleSheet.create({
   container: {
+    flex: 1,
+    backgroundColor: COLORS.bg,
+  },
+  modalContentBg: {
     flex: 1,
     backgroundColor: COLORS.bg,
   },
@@ -798,9 +1134,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  avatarIcon: {
-    fontSize: 20,
-  },
   locationRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -828,9 +1161,6 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.22)',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  headerIcon: {
-    fontSize: 18,
   },
   notifBadge: {
     position: 'absolute',
@@ -864,6 +1194,11 @@ const styles = StyleSheet.create({
     borderColor: AppColors.border,
     borderRadius: 20,
   },
+  balanceSectionTablet: {
+    paddingHorizontal: 22,
+    paddingVertical: 20,
+    borderRadius: 22,
+  },
   balanceLeft: {
     flex: 1,
   },
@@ -878,16 +1213,22 @@ const styles = StyleSheet.create({
     color: COLORS.lightText,
     fontWeight: '500',
   },
+  balanceLabelTablet: {
+    fontSize: 15,
+  },
   balanceChevron: {
     fontSize: 16,
     color: COLORS.lightText,
     fontWeight: '600',
   },
   balanceAmount: {
-    fontSize: 28,
-    fontWeight: '800',
+    fontSize: 22,
+    fontWeight: '400',
     color: COLORS.text,
-    letterSpacing: -0.5,
+    letterSpacing: 0,
+  },
+  balanceAmountTablet: {
+    fontSize: 26,
   },
   topUpButton: {
     backgroundColor: COLORS.primary,
@@ -895,16 +1236,27 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 20,
   },
+  topUpButtonTablet: {
+    paddingHorizontal: 26,
+    paddingVertical: 12,
+    borderRadius: 22,
+  },
   topUpText: {
     color: '#fff',
     fontSize: 14,
     fontWeight: '700',
   },
+  topUpTextTablet: {
+    fontSize: 16,
+  },
 
   // --- Scroll Content ---
   scrollContent: {
     paddingTop: 10,
-    paddingBottom: 100,
+    paddingBottom: 12,
+  },
+  scrollContentTablet: {
+    paddingBottom: 36,
   },
 
   // --- Section Headers ---
@@ -920,10 +1272,17 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: COLORS.text,
   },
+  sectionTitleTablet: {
+    fontSize: 22,
+    marginBottom: 2,
+  },
   seeAllLink: {
     fontSize: 14,
     fontWeight: '600',
     color: COLORS.primary,
+  },
+  seeAllLinkTablet: {
+    fontSize: 16,
   },
 
   // --- Grid Layout ---
@@ -982,6 +1341,15 @@ const styles = StyleSheet.create({
     padding: 16,
     justifyContent: 'center',
   },
+  gridIconBadge: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+  },
   gridEmoji: {
     fontSize: 32,
     marginBottom: 8,
@@ -1011,10 +1379,6 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontWeight: '700',
   },
-  gridEmojiSmall: {
-    fontSize: 26,
-    marginBottom: 6,
-  },
   gridTitleSmall: {
     fontSize: 14,
     fontWeight: '800',
@@ -1028,10 +1392,49 @@ const styles = StyleSheet.create({
 
   // --- Quick Tags ---
   tagsRow: {
-    marginBottom: 20,
+    marginBottom: 16,
   },
   tagsContent: {
     gap: 10,
+  },
+  homePromoBannerWrap: {
+    alignSelf: 'center',
+    width: '96%',
+    maxWidth: 520,
+    marginBottom: 20,
+    borderRadius: 16,
+    overflow: 'hidden',
+    backgroundColor: '#ECE8E3',
+  },
+  homePromoBannerWrapTablet: {
+    width: '100%',
+    maxWidth: 640,
+  },
+  homePromoBannerImage: {
+    width: '100%',
+  },
+  homePromoSlide: {
+    width: '100%',
+  },
+  homePromoDots: {
+    position: 'absolute',
+    bottom: 10,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 6,
+  },
+  homePromoDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.55)',
+  },
+  homePromoDotActive: {
+    width: 18,
+    backgroundColor: '#FFFFFF',
   },
   tagChip: {
     flexDirection: 'row',
@@ -1044,13 +1447,18 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: AppColors.border,
   },
-  tagEmoji: {
-    fontSize: 16,
+  tagChipTablet: {
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    borderRadius: 22,
   },
   tagLabel: {
     fontSize: 13,
     fontWeight: '600',
     color: COLORS.text,
+  },
+  tagLabelTablet: {
+    fontSize: 15,
   },
 
   // --- Featured Therapists ---
@@ -1066,14 +1474,23 @@ const styles = StyleSheet.create({
     gap: 12,
     paddingRight: 4,
   },
+  featuredGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    width: '100%',
+  },
   featuredCard: {
-    width: 140,
     backgroundColor: '#fff',
     borderRadius: 18,
     padding: 14,
     alignItems: 'center',
     borderWidth: 1,
     borderColor: AppColors.border,
+  },
+  featuredCardTablet: {
+    paddingVertical: 16,
+    paddingHorizontal: 10,
+    borderRadius: 20,
   },
   featuredAvatarWrap: {
     position: 'relative',
@@ -1092,9 +1509,6 @@ const styles = StyleSheet.create({
     height: '100%',
     borderRadius: 30,
   },
-  featuredAvatarText: {
-    fontSize: 30,
-  },
   featuredBadge: {
     position: 'absolute',
     bottom: -2,
@@ -1108,9 +1522,6 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: '#fff',
   },
-  featuredBadgeText: {
-    fontSize: 10,
-  },
   featuredName: {
     fontSize: 14,
     fontWeight: '700',
@@ -1118,27 +1529,43 @@ const styles = StyleSheet.create({
     marginBottom: 4,
     textAlign: 'center',
   },
+  featuredNameTablet: {
+    fontSize: 16,
+    fontWeight: '800',
+  },
   featuredRatingRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 3,
     marginBottom: 3,
   },
-  featuredStar: {
-    fontSize: 11,
-  },
   featuredRating: {
     fontSize: 13,
     fontWeight: '700',
     color: '#F5A623',
   },
+  featuredRatingTablet: {
+    fontSize: 15,
+  },
   featuredReviews: {
     fontSize: 11,
     color: COLORS.lightText,
   },
+  featuredReviewsTablet: {
+    fontSize: 12,
+  },
   featuredDistance: {
     fontSize: 11,
     color: COLORS.lightText,
+  },
+  featuredDistanceTablet: {
+    fontSize: 13,
+    marginBottom: 10,
+  },
+  featuredDistanceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
     marginBottom: 8,
   },
   featuredSpecialty: {
@@ -1147,10 +1574,19 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderRadius: 10,
   },
+  featuredSpecialtyTablet: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+    maxWidth: '100%',
+  },
   featuredSpecialtyText: {
     fontSize: 10,
     fontWeight: '600',
     color: COLORS.primary,
+  },
+  featuredSpecialtyTextTablet: {
+    fontSize: 12,
   },
 
   // --- Support Button ---
@@ -1193,71 +1629,6 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     maxHeight: '86%',
-  },
-  cityModalContent: {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    maxHeight: '82%',
-  },
-  citySearchWrap: {
-    marginHorizontal: 16,
-    marginTop: 12,
-    marginBottom: 8,
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: AppColors.primarySoft2,
-    borderRadius: 16,
-    paddingHorizontal: 10,
-    gap: 8,
-  },
-  citySearchInput: {
-    flex: 1,
-    fontSize: 14,
-    color: COLORS.text,
-    paddingVertical: 10,
-  },
-  searchIcon: {
-    fontSize: 14,
-  },
-  cityListContent: {
-    paddingHorizontal: 16,
-    paddingBottom: 20,
-  },
-  cityItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 12,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: AppColors.border,
-    backgroundColor: AppColors.white,
-    marginBottom: 8,
-  },
-  cityItemActive: {
-    backgroundColor: AppColors.primaryDark,
-    borderColor: AppColors.primaryDark,
-  },
-  cityItemText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: COLORS.text,
-  },
-  cityItemTextActive: {
-    color: '#fff',
-  },
-  cityCheck: {
-    color: '#fff',
-    fontWeight: '700',
-    fontSize: 14,
-  },
-  cityEmptyText: {
-    textAlign: 'center',
-    paddingVertical: 20,
-    color: COLORS.lightText,
-    fontSize: 14,
   },
   modalHeader: {
     flexDirection: 'row',
@@ -1350,9 +1721,6 @@ const styles = StyleSheet.create({
     height: '100%',
     borderRadius: 28,
   },
-  therapistAvatarText: {
-    fontSize: 28,
-  },
   therapistInfo: {
     flex: 1,
   },
@@ -1365,6 +1733,11 @@ const styles = StyleSheet.create({
   therapistMeta: {
     fontSize: 12,
     color: COLORS.lightText,
+  },
+  therapistMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
     marginBottom: 2,
   },
   therapistFooter: {
@@ -1419,10 +1792,6 @@ const styles = StyleSheet.create({
   therapistLoadingText: {
     fontSize: 14,
     color: COLORS.lightText,
-  },
-  therapistEmptyEmoji: {
-    fontSize: 40,
-    marginBottom: 12,
   },
   therapistEmptyText: {
     fontSize: 14,

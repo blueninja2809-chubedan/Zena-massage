@@ -2,20 +2,20 @@ import Feather from '@expo/vector-icons/Feather';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
-  Animated,
-  Image,
-  Linking,
-  Modal,
-  Pressable,
-  ScrollView,
-  StatusBar,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
+    ActivityIndicator,
+    Alert,
+    Animated,
+    Image,
+    Linking,
+    Modal,
+    Pressable,
+    ScrollView,
+    StatusBar,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View,
 } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -23,15 +23,16 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { AppColors } from '@/constants/appColors';
 import { useUser } from '@/contexts/UserContext';
 import { checkPayOSPaymentStatus, createPayOSPayment } from '@/lib/payosService';
+import { allowUnsignedForE2ETest, canUseAppFeatures } from '@/lib/session';
 import {
-  confirmPayosForBookingUser,
-  createSharedBookingRecord,
-  deleteBookingRecord,
-  getBookingStatus,
-  getOrCreateWallet,
-  mergeBookingPayload,
-  notifyBookingConfirmed,
-  walletDeduct,
+    confirmPayosForBookingUser,
+    createSharedBookingRecord,
+    deleteBookingRecord,
+    getBookingStatus,
+    getOrCreateWallet,
+    mergeBookingPayload,
+    notifyBookingConfirmed,
+    walletDeduct,
 } from '@/lib/supabaseService';
 
 const P = {
@@ -47,7 +48,7 @@ const P = {
   disabled: '#CBD5E1',
 };
 
-type PayKind = 'glow' | 'payos';
+type PayKind = 'zena' | 'payos';
 
 function tomorrowAt(h: number, m: number): Date {
   const d = new Date();
@@ -67,11 +68,7 @@ function fmtDateVi(d: Date) {
 export default function ServiceBookingScreen() {
   const router = useRouter();
   const { user, isLoading: userLoading } = useUser();
-  const isTestMode =
-    process.env.EXPO_PUBLIC_TEST_MODE === 'true' ||
-    process.env.EXPO_PUBLIC_TEST_MODE === '1' ||
-    // eslint-disable-next-line no-undef
-    (typeof __DEV__ !== 'undefined' && __DEV__);
+  const e2eBypass = allowUnsignedForE2ETest();
   const params = useLocalSearchParams<{
     serviceId?: string;
     name?: string;
@@ -92,14 +89,14 @@ export default function ServiceBookingScreen() {
   const image = params.image ? decodeURIComponent(String(params.image)) : '';
   const address = params.address ? decodeURIComponent(String(params.address)) : '';
 
-  // In test/dev we allow booking without login.
-  const userId = user?.authUid ?? (isTestMode ? 'test-user' : undefined);
+  // E2E builds may allow booking without login (see session helper).
+  const userId = user?.authUid ?? (e2eBypass ? 'test-user' : undefined);
 
   const [scheduledAt, setScheduledAt] = useState(() => tomorrowAt(10, 0));
   const [showSchedule, setShowSchedule] = useState(false);
-  const [payKind, setPayKind] = useState<PayKind>('glow');
+  const [payKind, setPayKind] = useState<PayKind>('zena');
   const [balance, setBalance] = useState(0);
-  const [zalo, setZalo] = useState(() => (isTestMode ? '0901234567' : ''));
+  const [zalo, setZalo] = useState(() => (e2eBypass ? '0901234567' : ''));
   const [loadingWallet, setLoadingWallet] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
@@ -158,9 +155,9 @@ export default function ServiceBookingScreen() {
   useEffect(() => () => stopPolling(), [stopPolling]);
 
   const zaloOk = /^[0-9+\s]{8,15}$/.test(zalo.replace(/\s/g, '')) && zalo.replace(/\D/g, '').length >= 8;
-  const canPayGlow = payKind === 'glow' && balance >= priceNum && zaloOk && !!userId;
+  const canPayZena = payKind === 'zena' && balance >= priceNum && zaloOk && !!userId;
   const canPayPayos = payKind === 'payos' && zaloOk && !!userId;
-  const canSubmit = (payKind === 'glow' ? canPayGlow : canPayPayos) && priceNum > 0;
+  const canSubmit = (payKind === 'zena' ? canPayZena : canPayPayos) && priceNum > 0;
 
   const goSuccess = useCallback(
     (paymentLabel: string) => {
@@ -203,7 +200,7 @@ export default function ServiceBookingScreen() {
     status: 'pending',
   });
 
-  const handleGlow = async () => {
+  const handleZenaWalletPay = async () => {
     if (!userId) return;
     const bookingPayload = buildBookingPayload();
     let bookingId: string | null = null;
@@ -213,16 +210,16 @@ export default function ServiceBookingScreen() {
       await walletDeduct(userId, priceNum, 'payment', `Đặt dịch vụ: ${name}`, bookingId);
       await mergeBookingPayload(
         bookingId,
-        { paymentStatus: 'paid', paymentMethod: 'glow', paidAt: new Date().toISOString() },
+        { paymentStatus: 'paid', paymentMethod: 'zena', paidAt: new Date().toISOString() },
         'confirmed',
       );
       notifyBookingConfirmed(userId, bookingId, 'Địa điểm dịch vụ', name, dateStr, timeStr).catch(() => {});
-      goSuccess('Số dư Glow');
+      goSuccess('Số dư Zena');
     } catch (e) {
       if (bookingId) await deleteBookingRecord(bookingId).catch(() => {});
       const msg = e instanceof Error ? e.message : String(e);
       if (msg.includes('insufficient_balance')) {
-        Alert.alert('Số dư không đủ', 'Vui lòng nạp thêm Glow hoặc chọn thanh toán PayOS.');
+        Alert.alert('Số dư không đủ', 'Vui lòng nạp thêm Zena hoặc chọn thanh toán PayOS.');
       } else {
         Alert.alert('Không thể thanh toán', msg);
       }
@@ -285,7 +282,7 @@ export default function ServiceBookingScreen() {
     try {
       setSubmitting(true);
       bookingId = await createSharedBookingRecord(bookingPayload);
-      const res = await createPayOSPayment(userId, priceNum, 'Dat dich vu Glow', bookingId);
+      const res = await createPayOSPayment(userId, priceNum, 'Dat dich vu Zena', bookingId);
       if (!res.success || !res.data) {
         if (bookingId) await deleteBookingRecord(bookingId).catch(() => {});
         Alert.alert('PayOS', res.message || 'Không tạo được thanh toán.');
@@ -312,12 +309,12 @@ export default function ServiceBookingScreen() {
       Alert.alert('Zalo', 'Vui lòng nhập số điện thoại Zalo hợp lệ.');
       return;
     }
-    if (payKind === 'glow') {
+    if (payKind === 'zena') {
       if (balance < priceNum) {
         Alert.alert('Số dư không đủ', 'Chọn nạp tiền hoặc thanh toán PayOS.');
         return;
       }
-      handleGlow();
+      handleZenaWalletPay();
     } else {
       handlePayos();
     }
@@ -338,7 +335,7 @@ export default function ServiceBookingScreen() {
     );
   }
 
-  if (!user?.authUid && !isTestMode) {
+  if (!canUseAppFeatures(user)) {
     return (
       <SafeAreaView style={[styles.safe, styles.centered]} edges={['top']}>
         <StatusBar barStyle="dark-content" />
@@ -409,13 +406,13 @@ export default function ServiceBookingScreen() {
         <View style={styles.card}>
           <Text style={styles.cardMuted}>Phương thức thanh toán</Text>
           <TouchableOpacity
-            style={[styles.payRow, payKind === 'glow' && styles.payRowOn]}
-            onPress={() => setPayKind('glow')}
+            style={[styles.payRow, payKind === 'zena' && styles.payRowOn]}
+            onPress={() => setPayKind('zena')}
             activeOpacity={0.85}
           >
-            <View style={styles.radioOuter}>{payKind === 'glow' ? <View style={styles.radioInner} /> : null}</View>
+            <View style={styles.radioOuter}>{payKind === 'zena' ? <View style={styles.radioInner} /> : null}</View>
             <View style={styles.payMid}>
-              <Text style={styles.payTitle}>Số dư Glow</Text>
+              <Text style={styles.payTitle}>Số dư Zena</Text>
               {loadingWallet ? (
                 <ActivityIndicator size="small" color={P.primary} style={{ marginTop: 6 }} />
               ) : (
@@ -671,8 +668,8 @@ const styles = StyleSheet.create({
   },
   radioInner: { width: 12, height: 12, borderRadius: 6, backgroundColor: P.primary },
   payMid: { flex: 1 },
-  payTitle: { fontSize: 15, fontWeight: '700', color: P.text },
-  payBal: { fontSize: 14, color: P.sub, marginTop: 4 },
+  payTitle: { fontSize: 14, fontWeight: '500', color: P.text },
+  payBal: { fontSize: 12, fontWeight: '400', color: P.sub, marginTop: 4 },
   paySub: { fontSize: 12, color: P.sub, marginTop: 4 },
   topupBtn: {
     backgroundColor: P.primary,

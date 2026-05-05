@@ -312,7 +312,7 @@ export default function BookingDetailModal({
 
         {/* Bottom Actions */}
         <View style={styles.bottomActions}>
-          {(booking.status === 'confirmed' || booking.status === 'in-progress' || booking.status === 'pending') && onOpenChat && (
+          {(booking.status === 'confirmed' || booking.status === 'in-progress') && onOpenChat && (
             <TouchableOpacity
               style={[styles.rebookBtn, { backgroundColor: '#5F8F47' }]}
               onPress={() => onOpenChat(booking.id)}

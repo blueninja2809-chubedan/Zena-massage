@@ -25,14 +25,20 @@ import { useUser } from '@/contexts/UserContext';
 import { checkPayOSPaymentStatus, createPayOSPayment } from '@/lib/payosService';
 import type { WalletTransaction } from '@/lib/supabaseService';
 import { AppColors } from '@/constants/appColors';
-import { getOrCreateWallet, getWalletTransactions, walletTopUp } from '@/lib/supabaseService';
+import {
+  getOrCreateWallet,
+  getTherapistCostWalletBalance,
+  getWalletTransactions,
+  therapistUnifiedWalletTopUp,
+  walletTopUp,
+} from '@/lib/supabaseService';
 
 const { width: SCREEN_W } = Dimensions.get('window');
 
 const TR: Record<OnboardingLanguage, Record<string, string>> = {
   vi: {
     title: 'Nạp tiền',
-    balanceLabel: 'Số dư hiện tại',
+    balanceLabel: 'Số dư ví',
     currency: 'đ',
     amountPlaceholder: 'Nhập số tiền (VND)',
     methodTitle: 'Phương thức thanh toán',
@@ -70,10 +76,12 @@ const TR: Record<OnboardingLanguage, Record<string, string>> = {
     qrExpired: 'Mã QR đã hết hạn. Vui lòng thử lại.',
     qrCreating: 'Đang tạo mã thanh toán...',
     recommended: 'Khuyên dùng',
+    unifiedHint:
+      'Một số dư: thu nhập từ đơn cộng khoản phí kết nối (sau mỗi đơn, 20% giá trị đơn tính vào phí). Khi chưa từng nhận đơn, chỉ cần phí ≥ 0. Khi đã có đơn, tổng số dư cần ≥ 200.000 đ để tiếp tục nhận đơn.',
   },
   en: {
     title: 'Top Up',
-    balanceLabel: 'Current Balance',
+    balanceLabel: 'Wallet balance',
     currency: '₫',
     amountPlaceholder: 'Enter amount (VND)',
     methodTitle: 'Payment Method',
@@ -110,6 +118,8 @@ const TR: Record<OnboardingLanguage, Record<string, string>> = {
     qrExpired: 'QR code expired. Please try again.',
     qrCreating: 'Creating payment...',
     recommended: 'Recommended',
+    unifiedHint:
+      'One balance: earnings plus connection fee (20% of each order). If you have never been assigned a job, only the fee part must be ≥ 0. After your first order, the total must be ≥ 200,000 VND to keep receiving jobs.',
   },
 };
 
@@ -155,6 +165,7 @@ export default function TherapistTopUpScreen({ onClose }: { onClose?: () => void
   const router = useRouter();
   const { language } = useLanguage();
   const { user } = useUser();
+  const isTherapist = user?.role === 'therapist';
   const t = TR[language as OnboardingLanguage] || TR.vi;
   const fmt = (n: number) => n.toLocaleString('vi-VN');
 
@@ -162,6 +173,7 @@ export default function TherapistTopUpScreen({ onClose }: { onClose?: () => void
   const [amount, setAmount] = useState('');
   const [method, setMethod] = useState<MethodKey | null>('payos');
   const [balance, setBalance] = useState(0);
+  const [costBalance, setCostBalance] = useState(0);
   const [history, setHistory] = useState<WalletTransaction[]>([]);
   const [loadingWallet, setLoadingWallet] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -170,14 +182,16 @@ export default function TherapistTopUpScreen({ onClose }: { onClose?: () => void
   const [showQr, setShowQr] = useState(false);
   const [qrCodeValue, setQrCodeValue] = useState('');
   const [checkoutUrl, setCheckoutUrl] = useState('');
-  const [polling, setPolling] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pendingPayRef = useRef<{ amount: number }>({ amount: 0 });
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
   const userId = user?.authUid;
   const numericAmount = Number(String(amount).replace(/\D/g, '')) || 0;
   const hasAmount = numericAmount > 0;
   const canContinue = hasAmount && !!method && !submitting;
+  /** Một số dư hiển thị: thu nhập (wallets) + phí (cost wallet). */
+  const displayBalance = isTherapist ? balance + costBalance : balance;
 
   // ── Load wallet ──
   const loadWallet = useCallback(async () => {
@@ -190,12 +204,18 @@ export default function TherapistTopUpScreen({ onClose }: { onClose?: () => void
       ]);
       setBalance(w.balance);
       setHistory(txns);
+      if (isTherapist) {
+        const c = await getTherapistCostWalletBalance(userId);
+        setCostBalance(c);
+      } else {
+        setCostBalance(0);
+      }
     } catch {
       // silent
     } finally {
       setLoadingWallet(false);
     }
-  }, [userId]);
+  }, [userId, isTherapist]);
 
   useEffect(() => { loadWallet(); }, [loadWallet]);
 
@@ -230,15 +250,27 @@ export default function TherapistTopUpScreen({ onClose }: { onClose?: () => void
         return;
       }
       try {
-        setPolling(true);
         const res = await checkPayOSPaymentStatus(orderCode);
         if (res.success && res.data) {
-          if (res.data.status === 'PAID') {
+            if (res.data.status === 'PAID') {
             stopPolling(); setShowQr(false);
             if (userId) {
+              const { amount: paidAmt } = pendingPayRef.current;
+              try {
+                if (isTherapist) {
+                  await therapistUnifiedWalletTopUp(userId, paidAmt, 'payos');
+                } else {
+                  await walletTopUp(userId, paidAmt, 'payos');
+                }
+              } catch {
+                /* server có thể đã cộng qua webhook — vẫn refresh */
+              }
               const [w, txns] = await Promise.all([getOrCreateWallet(userId), getWalletTransactions(userId)]);
               setBalance(w.balance);
               setHistory(txns);
+              if (isTherapist) {
+                setCostBalance(await getTherapistCostWalletBalance(userId));
+              }
             }
             setAmount(''); setMethod('payos');
             Alert.alert(t.qrSuccess, t.qrSuccessMsg);
@@ -247,9 +279,9 @@ export default function TherapistTopUpScreen({ onClose }: { onClose?: () => void
             Alert.alert(t.qrFailed, t.qrExpired);
           }
         }
-      } catch { /* retry */ } finally { setPolling(false); }
+      } catch { /* retry */ }
     }, 5000);
-  }, [stopPolling, userId, t]);
+  }, [stopPolling, userId, t, isTherapist]);
 
   // ── Handlers ──
   const handleContinue = async () => {
@@ -260,6 +292,7 @@ export default function TherapistTopUpScreen({ onClose }: { onClose?: () => void
     if (method === 'payos') {
       try {
         setSubmitting(true);
+        pendingPayRef.current = { amount: numericAmount };
         const res = await createPayOSPayment(userId, numericAmount);
         if (!res.success || !res.data) { Alert.alert(t.qrFailed, res.message || ''); return; }
         setQrCodeValue(res.data.qrCode);
@@ -275,10 +308,19 @@ export default function TherapistTopUpScreen({ onClose }: { onClose?: () => void
     // Other methods
     try {
       setSubmitting(true);
-      const res = await walletTopUp(userId, numericAmount, method);
-      setBalance(res.balance); setAmount(''); setMethod('payos');
-      const txns = await getWalletTransactions(userId);
+      if (isTherapist) {
+        await therapistUnifiedWalletTopUp(userId, numericAmount, method);
+      } else {
+        await walletTopUp(userId, numericAmount, method);
+      }
+      setAmount('');
+      setMethod('payos');
+      const [w, txns] = await Promise.all([getOrCreateWallet(userId), getWalletTransactions(userId)]);
+      setBalance(w.balance);
       setHistory(txns);
+      if (isTherapist) {
+        setCostBalance(await getTherapistCostWalletBalance(userId));
+      }
       Alert.alert(t.topupSuccess, `${t.topupSuccessMsg}\n+${fmt(numericAmount)} ${t.currency}`);
     } catch (err: unknown) {
       Alert.alert(t.topupError, (err as Error)?.message || String(err));
@@ -310,8 +352,13 @@ export default function TherapistTopUpScreen({ onClose }: { onClose?: () => void
           {loadingWallet ? (
             <ActivityIndicator color={P.primary} style={{ marginVertical: 8 }} />
           ) : (
-            <Text style={s.balanceAmount}>{fmt(balance)} <Text style={s.balanceCurrency}>{t.currency}</Text></Text>
+            <Text style={s.balanceAmount}>
+              {fmt(displayBalance)} <Text style={s.balanceCurrency}>{t.currency}</Text>
+            </Text>
           )}
+          {isTherapist && !loadingWallet ? (
+            <Text style={s.unifiedHint}>{t.unifiedHint}</Text>
+          ) : null}
         </View>
       </View>
 
@@ -552,15 +599,22 @@ const s = StyleSheet.create({
     letterSpacing: 1,
   },
   balanceAmount: {
-    fontSize: 34,
-    fontWeight: '800',
+    fontSize: 24,
+    fontWeight: '400',
     color: P.text,
-    letterSpacing: -0.5,
+    letterSpacing: 0,
   },
   balanceCurrency: {
-    fontSize: 20,
-    fontWeight: '600',
+    fontSize: 16,
+    fontWeight: '400',
     color: P.sub,
+  },
+  unifiedHint: {
+    marginTop: 12,
+    fontSize: 12,
+    color: P.sub,
+    lineHeight: 18,
+    textAlign: 'center',
   },
 
   // ── Body ──
@@ -593,28 +647,34 @@ const s = StyleSheet.create({
     marginTop: 4,
   },
 
-  // ── Amount Input ──
+  // ── Amount Input — chữ gọn, nhẹ, thanh thoát hơn ô số cũ (28/700) ──
   amountInputWrap: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: P.bg,
-    borderRadius: 14,
-    paddingHorizontal: 16,
-    borderWidth: 1.5,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 2,
+    minHeight: 48,
+    borderWidth: 1,
     borderColor: P.line,
   },
   inputPrefix: {
-    fontSize: 28,
-    fontWeight: '700',
-    color: P.primary,
-    marginRight: 8,
+    fontSize: 18,
+    fontWeight: '500',
+    color: P.sub,
+    marginRight: 6,
+    letterSpacing: 0.2,
   },
   amountInput: {
     flex: 1,
-    fontSize: 28,
-    fontWeight: '700',
+    fontSize: 18,
+    fontWeight: '500',
     color: P.text,
-    paddingVertical: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 0,
+    margin: 0,
+    letterSpacing: 0.3,
   },
 
   // ── Payment methods ──

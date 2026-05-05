@@ -15,18 +15,28 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import type { OnboardingLanguage } from '@/components/Onboarding';
+import { AppColors } from '@/constants/appColors';
 import { DEFAULT_CITY, SERVICE_TYPES, VIETNAM_PROVINCES } from '@/constants/bookingFilters';
+import { cityLooseMatch } from '@/lib/cityMatch';
 import type { SharedBooking } from '@/contexts/BookingsContext';
 import { useBookings } from '@/contexts/BookingsContext';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useUser } from '@/contexts/UserContext';
-import { AppColors } from '@/constants/appColors';
-import { checkTherapistMinBalance, getTherapistAvailability, updateTherapistAvailability } from '@/lib/supabaseService';
+import { useRouter } from 'expo-router';
+import {
+  checkTherapistMinBalance,
+  getTherapistAvailability,
+  therapistApplyToBroadcastBooking,
+  therapistPrimaryAcceptBooking,
+  therapistPrimaryDeclineBooking,
+  therapistSkipBroadcastBooking,
+  updateTherapistAvailability,
+} from '@/lib/supabaseService';
 
 const translations: Record<OnboardingLanguage, Record<string, string>> = {
   vi: {
     title: 'Nhận việc',
-    rank: 'Hạng thường',
+    rank: 'Hạng',
     profileVisible: 'Hiện hồ sơ',
     doneJobs: 'Số đơn đã hoàn thành',
     openJobs: 'Đơn mở',
@@ -47,6 +57,19 @@ const translations: Record<OnboardingLanguage, Record<string, string>> = {
     minutes: 'phút',
     earning: 'Bạn sẽ nhận được',
     recentJobs: 'Công việc phù hợp',
+    newOrders: 'Đơn mới',
+    costWalletBlockTitle: 'Chưa đủ điều kiện nhận đơn',
+    costWalletBlockMsg:
+      'Phí kết nối không được âm. Nếu bạn đã từng nhận đơn, tổng số dư (thu nhập + phí) cần ≥ 200.000 đ. Vào Nạp tiền để bổ sung.',
+    cannotAcceptCostTitle: 'Chưa thể nhận đơn',
+    cannotAcceptCostMsg:
+      'Kiểm tra phí kết nối (≥ 0) và tổng số dư (≥ 200.000 đ khi đã có đơn). Nạp tiền tại mục Nạp tiền.',
+    topupCta: 'Nạp tiền',
+    accept: 'Chấp nhận',
+    decline: 'Hủy',
+    skip: 'Bỏ qua',
+    directedBadge: 'Khách chọn bạn',
+    actionFailed: 'Thao tác không thành công',
   },
   en: {
     title: 'Jobs',
@@ -71,6 +94,19 @@ const translations: Record<OnboardingLanguage, Record<string, string>> = {
     minutes: 'min',
     earning: 'You will receive',
     recentJobs: 'Matching jobs',
+    newOrders: 'New orders',
+    costWalletBlockTitle: 'Not eligible to accept jobs',
+    costWalletBlockMsg:
+      'Connection fee cannot be negative. After your first order, your total balance (earnings + fee) must be at least 200,000 VND. Use Top up.',
+    cannotAcceptCostTitle: 'Cannot accept job',
+    cannotAcceptCostMsg:
+      'Check connection fee (≥ 0) and total balance (≥ 200,000 VND if you have orders). Top up in the app.',
+    topupCta: 'Top up',
+    accept: 'Accept',
+    decline: 'Decline',
+    skip: 'Skip',
+    directedBadge: 'Client chose you',
+    actionFailed: 'Action failed',
   },
 };
 
@@ -84,15 +120,17 @@ const C = {
   accentSoft: AppColors.primarySoft,
   chip: AppColors.accentSoft,
   urgent: '#F2A51D',
+  warnBg: '#FFF8E1',
   complete: AppColors.accent,
   info: AppColors.primary,
 };
 const ALL_SERVICE = 'Tất cả';
 
 export default function TherapistDashboard() {
+  const router = useRouter();
   const { language } = useLanguage();
   const { user } = useUser();
-  const { getTherapistBookings, updateStatus } = useBookings();
+  const { getTherapistBookings, getTherapistJobInbox, updateStatus, refreshBookings } = useBookings();
   const t = translations[language as OnboardingLanguage] || translations.vi;
 
   const [isAvailable, setIsAvailable] = useState(true);
@@ -102,6 +140,8 @@ export default function TherapistDashboard() {
   const [selectedService, setSelectedService] = useState<string>(ALL_SERVICE);
   const [showCityModal, setShowCityModal] = useState(false);
   const [showServiceModal, setShowServiceModal] = useState(false);
+  /** Điều kiện theo server: phí ≥ 0, và từng có đơn thì tổng số dư ≥ 200.000. */
+  const [canReceiveByWallet, setCanReceiveByWallet] = useState(true);
 
   useEffect(() => {
     if (user?.authUid) {
@@ -111,24 +151,29 @@ export default function TherapistDashboard() {
     }
   }, [user?.authUid]);
 
+  useEffect(() => {
+    if (!user?.authUid) {
+      setCanReceiveByWallet(true);
+      return;
+    }
+    checkTherapistMinBalance(user.authUid, 0)
+      .then(setCanReceiveByWallet)
+      .catch(() => setCanReceiveByWallet(true));
+  }, [user?.authUid]);
+
   const handleToggleAvailability = async (value: boolean) => {
     if (!user?.authUid) return;
 
-    // If turning ON, check minimum balance (500,000đ)
     if (value) {
       try {
-        const hasMinBalance = await checkTherapistMinBalance(user.authUid, 500000);
-        if (!hasMinBalance) {
-          Alert.alert(
-            language === 'vi' ? 'Số dư không đủ' : 'Insufficient Balance',
-            language === 'vi'
-              ? 'Bạn cần có ít nhất 500.000đ trong ví để hiện hồ sơ nhận việc. Vui lòng nạp tiền vào ví.'
-              : 'You need at least 500,000đ in your wallet to show your profile. Please top up your wallet.',
-          );
+        const canReceive = await checkTherapistMinBalance(user.authUid, 0);
+        if (!canReceive) {
+          Alert.alert(t.costWalletBlockTitle, t.costWalletBlockMsg);
           return;
         }
+        setCanReceiveByWallet(true);
       } catch {
-        // If check fails, allow toggle but warn
+        /* empty */
       }
     }
 
@@ -144,9 +189,47 @@ export default function TherapistDashboard() {
   };
 
   const displayName = user?.displayName || user?.phoneNumber || 'KTV';
-  const allBookings = getTherapistBookings(displayName);
-  const completedCount = allBookings.filter((b) => b.status === 'completed').length;
-  const openCount = allBookings.filter((b) => b.status !== 'completed' && b.status !== 'cancelled').length;
+  const myNamedBookings = getTherapistBookings(displayName);
+  const workingCityFilter =
+    user?.workingCity ||
+    (selectedCity !== t.all && selectedCity !== 'Tất cả' ? selectedCity : '') ||
+    DEFAULT_CITY;
+  const inboxBookings = getTherapistJobInbox({
+    displayName,
+    therapistUid: user?.authUid ?? '',
+    workingCity: workingCityFilter,
+  });
+  const sortedInbox = useMemo(() => {
+    const uid = user?.authUid;
+    const copy = [...inboxBookings];
+    copy.sort((a, b) => {
+      const aPin =
+        !!uid &&
+        a.requestedTherapistId === uid &&
+        (a.primaryAction === 'pending' || !a.primaryAction) &&
+        a.status === 'pending';
+      const bPin =
+        !!uid &&
+        b.requestedTherapistId === uid &&
+        (b.primaryAction === 'pending' || !b.primaryAction) &&
+        b.status === 'pending';
+      if (aPin !== bPin) {
+        return aPin ? -1 : 1;
+      }
+      return b.date.localeCompare(a.date);
+    });
+    return copy;
+  }, [inboxBookings, user?.authUid]);
+  const allBookings = sortedInbox;
+  const completedCount = myNamedBookings.filter((b) => b.status === 'completed').length;
+  const currentRank = useMemo(() => {
+    if (completedCount >= 51) return 'Bạch kim';
+    if (completedCount >= 41) return 'Vàng';
+    if (completedCount >= 31) return 'Bạc';
+    return 'Đồng';
+  }, [completedCount]);
+  const openCount = inboxBookings.filter((b) => b.status !== 'completed' && b.status !== 'cancelled').length;
+  const newOrdersCount = inboxBookings.filter((b) => b.status === 'pending').length;
 
   const getDurationMinutes = (time: string) => {
     const parts = time.split('-').map((v) => v.trim());
@@ -164,9 +247,19 @@ export default function TherapistDashboard() {
   const visibleJobs = useMemo(() => {
     const base = allBookings.filter((b) => b.status !== 'cancelled');
 
-    const byCity = selectedCity === t.all
-      ? base
-      : base.filter((b) => (b.address || '').toLowerCase().includes(selectedCity.toLowerCase()));
+    const byCity =
+      selectedCity === t.all
+        ? base
+        : base.filter((b) => {
+            const sel = selectedCity.trim();
+            if ((b.address || '').toLowerCase().includes(sel.toLowerCase())) {
+              return true;
+            }
+            if (b.jobCity && cityLooseMatch(b.jobCity, sel)) {
+              return true;
+            }
+            return false;
+          });
 
     const byService = selectedService === ALL_SERVICE
       ? byCity
@@ -177,12 +270,71 @@ export default function TherapistDashboard() {
   }, [allBookings, onlyCompleted, selectedCity, selectedService, t.all]);
 
   const projectedIncome = useMemo(
-    () => visibleJobs.reduce((sum, b) => sum + Math.round((b.price * 0.67) / 1000) * 1000, 0),
+    () => visibleJobs.reduce((sum, b) => sum + Math.round(Number(b.price) || 0), 0),
     [visibleJobs],
   );
 
-  const applyToJob = (item: SharedBooking) => {
-    if (item.status === 'pending') updateStatus(item.id, 'confirmed');
+  const ensureWalletOk = async (): Promise<boolean> => {
+    if (!user?.authUid) {
+      return false;
+    }
+    try {
+      const ok = await checkTherapistMinBalance(user.authUid, 0);
+      if (!ok) {
+        Alert.alert(t.cannotAcceptCostTitle, t.cannotAcceptCostMsg, [
+          { text: language === 'vi' ? 'Để sau' : 'Later', style: 'cancel' },
+          { text: t.topupCta, onPress: () => router.push('/therapist-topup') },
+        ]);
+        return false;
+      }
+    } catch {
+      /* empty */
+    }
+    return true;
+  };
+
+  const applyToJob = async (item: SharedBooking) => {
+    if (item.status !== 'pending') return;
+    if (!(await ensureWalletOk())) return;
+    if (item.assignmentFlow === 'nominated_city_broadcast' && user?.authUid) {
+      const r = await therapistApplyToBroadcastBooking(
+        item.id,
+        user.authUid,
+        displayName,
+        user?.avatarUri,
+      );
+      if (!r.ok) {
+        Alert.alert(t.actionFailed, r.reason ?? '');
+      }
+      await refreshBookings();
+      return;
+    }
+    updateStatus(item.id, 'confirmed');
+  };
+
+  const onPrimaryAccept = async (item: SharedBooking) => {
+    if (!user?.authUid) return;
+    if (!(await ensureWalletOk())) return;
+    const r = await therapistPrimaryAcceptBooking(item.id, user.authUid);
+    if (!r.ok) {
+      Alert.alert(t.actionFailed, r.reason ?? '');
+    }
+    await refreshBookings();
+  };
+
+  const onPrimaryDecline = async (item: SharedBooking) => {
+    if (!user?.authUid) return;
+    const r = await therapistPrimaryDeclineBooking(item.id, user.authUid);
+    if (!r.ok) {
+      Alert.alert(t.actionFailed, r.reason ?? '');
+    }
+    await refreshBookings();
+  };
+
+  const onSkipJob = async (item: SharedBooking) => {
+    if (!user?.authUid) return;
+    await therapistSkipBroadcastBooking(item.id, user.authUid);
+    await refreshBookings();
   };
 
   const renderTopTag = (item: SharedBooking) => {
@@ -198,7 +350,10 @@ export default function TherapistDashboard() {
 
     return (
       <View style={s.topTagRow}>
-        <Text style={s.newTagText}>⚡ {t.newJob}</Text>
+        <View style={s.newTagInner}>
+          <Feather name="zap" size={14} color={C.accent} />
+          <Text style={s.newTagText}>{t.newJob}</Text>
+        </View>
         <View style={[s.pillTag, { backgroundColor: C.urgent }]}>
           <Text style={s.pillTagText}>{t.urgent}</Text>
         </View>
@@ -208,12 +363,34 @@ export default function TherapistDashboard() {
 
   const renderJobCard = (item: SharedBooking) => {
     const duration = getDurationMinutes(item.time);
-    const earned = Math.round((item.price * 0.67) / 1000) * 1000;
+    const earned = Math.round(Number(item.price) || 0);
+    const uid = user?.authUid;
+    const isDirected =
+      item.assignmentFlow === 'nominated_city_broadcast' &&
+      !!uid &&
+      item.requestedTherapistId === uid &&
+      (item.primaryAction === 'pending' || item.primaryAction == null) &&
+      item.status === 'pending';
+    const isBroadcastOther =
+      item.assignmentFlow === 'nominated_city_broadcast' &&
+      !!uid &&
+      !!item.requestedTherapistId &&
+      item.requestedTherapistId !== uid &&
+      item.status === 'pending';
     const applyDisabled = item.status !== 'pending';
     const actionLabel = item.status === 'pending' ? t.apply : t.accepted;
 
     return (
-      <View key={item.id} style={s.jobCard}>
+      <View
+        key={item.id}
+        style={[s.jobCard, isDirected && { borderColor: C.accent, borderWidth: 2, backgroundColor: '#FFFBF8' }]}
+      >
+        {isDirected ? (
+          <View style={s.directedPill}>
+            <Feather name="star" size={14} color="#fff" />
+            <Text style={s.directedPillText}>{t.directedBadge}</Text>
+          </View>
+        ) : null}
         {item.status !== 'confirmed' && renderTopTag(item)}
         <Text style={s.jobCustomer}>{item.customerName}</Text>
         <Text style={s.jobAddress}>{item.address}</Text>
@@ -233,31 +410,74 @@ export default function TherapistDashboard() {
             <Text style={s.earningLabel}>{t.earning}</Text>
             <Text style={s.earningValue}>+{earned.toLocaleString('vi-VN')} đ</Text>
           </View>
-          <TouchableOpacity
-            activeOpacity={1}
-            onPress={() => applyToJob(item)}
-            style={[s.applyButton, applyDisabled && s.applyButtonDisabled]}
-            disabled={applyDisabled}
-          >
-            <Text style={[s.applyButtonText, applyDisabled && s.applyButtonTextDisabled]}>{actionLabel}</Text>
-          </TouchableOpacity>
+          {isDirected ? (
+            <View style={s.dualBtnRow}>
+              <TouchableOpacity
+                activeOpacity={0.9}
+                onPress={() => void onPrimaryDecline(item)}
+                style={[s.secondaryBtn, applyDisabled && s.applyButtonDisabled]}
+                disabled={applyDisabled}
+              >
+                <Text style={s.secondaryBtnText}>{t.decline}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                activeOpacity={0.9}
+                onPress={() => void onPrimaryAccept(item)}
+                style={[s.applyButton, { marginLeft: 8 }, applyDisabled && s.applyButtonDisabled]}
+                disabled={applyDisabled}
+              >
+                <Text style={[s.applyButtonText, applyDisabled && s.applyButtonTextDisabled]}>{t.accept}</Text>
+              </TouchableOpacity>
+            </View>
+          ) : isBroadcastOther ? (
+            <View style={s.dualBtnRow}>
+              <TouchableOpacity
+                activeOpacity={0.9}
+                onPress={() => void onSkipJob(item)}
+                style={s.secondaryBtn}
+              >
+                <Text style={s.secondaryBtnText}>{t.skip}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                activeOpacity={1}
+                onPress={() => void applyToJob(item)}
+                style={[s.applyButton, { marginLeft: 8 }, applyDisabled && s.applyButtonDisabled]}
+                disabled={applyDisabled}
+              >
+                <Text style={[s.applyButtonText, applyDisabled && s.applyButtonTextDisabled]}>{actionLabel}</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <TouchableOpacity
+              activeOpacity={1}
+              onPress={() => void applyToJob(item)}
+              style={[s.applyButton, applyDisabled && s.applyButtonDisabled]}
+              disabled={applyDisabled}
+            >
+              <Text style={[s.applyButtonText, applyDisabled && s.applyButtonTextDisabled]}>{actionLabel}</Text>
+            </TouchableOpacity>
+          )}
         </View>
       </View>
     );
   };
 
   return (
-    <SafeAreaView style={s.container} edges={['top']}>
+    <SafeAreaView style={s.container} edges={['top', 'left', 'right']}>
       <StatusBar barStyle="dark-content" backgroundColor={C.bg} />
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={s.contentWrap}>
+      <ScrollView
+        style={s.scroll}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={s.contentWrap}
+      >
         <View style={s.hero}>
           <View style={s.heroHeadRow}>
-            <View style={s.rankPill}>
-              <Text style={s.rankPillIcon}>◈</Text>
-              <Text style={s.rankPillText}>{t.rank}</Text>
+            <TouchableOpacity style={s.rankPill} onPress={() => router.push('/therapist-rank')} activeOpacity={0.85}>
+              <Feather name="award" size={14} color="#6B8C5B" />
+              <Text style={s.rankPillText}>{t.rank} {currentRank}</Text>
               <Feather name="chevron-right" size={14} color="#6B8C5B" />
-            </View>
+            </TouchableOpacity>
             <View style={s.switchRow}>
               <Text style={s.switchLabel}>{t.profileVisible}</Text>
               <Switch
@@ -296,6 +516,16 @@ export default function TherapistDashboard() {
           </View>
         </View>
 
+        {!canReceiveByWallet ? (
+          <View style={[s.costWalletBanner, { backgroundColor: C.warnBg }]}>
+            <Text style={s.costWalletBannerTitle}>{t.costWalletBlockTitle}</Text>
+            <Text style={s.costWalletBannerText}>{t.costWalletBlockMsg}</Text>
+            <TouchableOpacity style={s.costWalletBtn} onPress={() => router.push('/therapist-topup')} activeOpacity={0.85}>
+              <Text style={s.costWalletBtnText}>{t.topupCta}</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
+
         <View style={s.filterPanel}>
           <View style={s.filterHead}>
             <Text style={s.filterTitle}>{t.filter}</Text>
@@ -329,7 +559,16 @@ export default function TherapistDashboard() {
           </ScrollView>
         </View>
 
-        <Text style={s.sectionTitle}>{visibleJobs.length ? t.recentJobs : t.noJobs}</Text>
+        <View style={s.sectionTitleRow}>
+          <Text style={s.sectionTitle}>{visibleJobs.length ? t.recentJobs : t.noJobs}</Text>
+          {newOrdersCount > 0 ? (
+            <View style={s.newOrdersBadge}>
+              <Text style={s.newOrdersBadgeText}>
+                {t.newOrders}: {newOrdersCount}
+              </Text>
+            </View>
+          ) : null}
+        </View>
 
         {visibleJobs.length === 0 ? (
           <View style={s.emptyWrap}>
@@ -400,8 +639,15 @@ export default function TherapistDashboard() {
 }
 
 const s = StyleSheet.create({
-  container: { flex: 1, backgroundColor: C.bg },
-  contentWrap: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 120 },
+  container: { flex: 1, width: '100%', maxWidth: '100%', alignSelf: 'stretch', backgroundColor: C.bg },
+  scroll: { flex: 1, width: '100%' },
+  contentWrap: {
+    width: '100%',
+    flexGrow: 1,
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 120,
+  },
 
   hero: {
     backgroundColor: C.card,
@@ -422,7 +668,6 @@ const s = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 5,
   },
-  rankPillIcon: { color: C.text, fontSize: 12, fontWeight: '700' },
   rankPillText: { color: C.text, fontSize: 12, fontWeight: '700' },
   switchRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   switchLabel: { color: C.text, fontSize: 14, fontWeight: '700' },
@@ -438,8 +683,28 @@ const s = StyleSheet.create({
   statRow: { marginTop: 10, flexDirection: 'row', gap: 10 },
   statCard: { flex: 1 },
   statTitle: { color: C.text, fontSize: 12, fontWeight: '600' },
-  statValue: { color: C.text, fontSize: 34, lineHeight: 36, fontWeight: '800', marginTop: 2 },
+  statValue: { color: C.text, fontSize: 30, lineHeight: 34, fontWeight: '500', marginTop: 2 },
   statSub: { color: '#666666', fontSize: 12, marginTop: 2, fontWeight: '600' },
+
+  costWalletBanner: {
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: '#F5D7A3',
+    borderRadius: 14,
+    padding: 14,
+  },
+  costWalletBannerTitle: { fontSize: 15, fontWeight: '800', color: C.text, marginBottom: 6 },
+  costWalletBannerText: { fontSize: 13, color: C.sub, lineHeight: 20 },
+  costWalletBannerAmt: { fontWeight: '800', color: C.urgent },
+  costWalletBtn: {
+    marginTop: 12,
+    alignSelf: 'flex-start',
+    backgroundColor: C.accent,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 10,
+  },
+  costWalletBtnText: { color: '#fff', fontWeight: '800', fontSize: 13 },
 
   filterPanel: {
     marginTop: 14,
@@ -476,9 +741,28 @@ const s = StyleSheet.create({
 
   sectionTitle: {
     marginTop: 16,
-    marginBottom: 10,
     color: C.text,
     fontSize: 18,
+    fontWeight: '800',
+  },
+  sectionTitleRow: {
+    marginBottom: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  newOrdersBadge: {
+    backgroundColor: '#FFF4E5',
+    borderColor: '#F6C68A',
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  newOrdersBadgeText: {
+    color: '#8A4B08',
+    fontSize: 12,
     fontWeight: '800',
   },
 
@@ -490,7 +774,32 @@ const s = StyleSheet.create({
     padding: 14,
     marginBottom: 12,
   },
+  directedPill: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: C.accent,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    marginBottom: 8,
+  },
+  directedPillText: { color: '#fff', fontSize: 12, fontWeight: '800' },
+  dualBtnRow: { flexDirection: 'row', alignItems: 'center' },
+  secondaryBtn: {
+    minWidth: 100,
+    borderRadius: 999,
+    borderWidth: 1.5,
+    borderColor: C.accent,
+    alignItems: 'center',
+    paddingVertical: 11,
+    paddingHorizontal: 14,
+    backgroundColor: '#fff',
+  },
+  secondaryBtnText: { color: C.accent, fontSize: 15, fontWeight: '700' },
   topTagRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  newTagInner: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   newTagText: { color: C.text, fontSize: 14, fontWeight: '800' },
   pillTag: { borderRadius: 999, paddingHorizontal: 12, paddingVertical: 4 },
   pillTagText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
@@ -509,7 +818,7 @@ const s = StyleSheet.create({
   jobDuration: { color: '#91979E', fontSize: 13 },
   jobBottomRow: { marginTop: 10, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' },
   earningLabel: { color: '#666666', fontSize: 12, marginBottom: 4 },
-  earningValue: { color: C.text, fontSize: 33, lineHeight: 36, fontWeight: '800' },
+  earningValue: { color: C.text, fontSize: 29, lineHeight: 33, fontWeight: '500' },
   applyButton: {
     minWidth: 170,
     borderRadius: 999,
@@ -517,7 +826,7 @@ const s = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 11,
   },
-  applyButtonDisabled: { backgroundColor: '#D7DEE5' },
+  applyButtonDisabled: { backgroundColor: AppColors.primarySoft },
   applyButtonText: { color: '#FFFFFF', fontSize: 15, fontWeight: '700' },
   applyButtonTextDisabled: { color: '#7B8794' },
 

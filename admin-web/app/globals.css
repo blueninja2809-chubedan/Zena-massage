@@ -1,0 +1,130 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --admin-bg: #f4f6fb;
+  --admin-surface: #ffffff;
+  --admin-ink: #0f172a;
+  --admin-muted: #64748b;
+  --admin-border: #e2e8f0;
+  --admin-accent: #d94666;
+  --admin-accent-dim: #fce7ed;
+  --admin-sidebar: #0b1220;
+  --admin-sidebar-hover: #151f32;
+  --font-sans: var(--font-geist-sans), system-ui, sans-serif;
+}
+
+@layer base {
+  html {
+    @apply antialiased;
+  }
+  body {
+    color: var(--admin-ink);
+    background: var(--admin-bg);
+    font-family: var(--font-sans);
+  }
+}
+
+@layer components {
+  .admin-bg-mesh {
+    background-color: var(--admin-bg);
+    background-image:
+      radial-gradient(1200px 600px at 15% -10%, rgba(217, 70, 102, 0.09), transparent 50%),
+      radial-gradient(900px 500px at 100% 0%, rgba(99, 102, 241, 0.07), transparent 45%),
+      radial-gradient(800px 400px at 60% 100%, rgba(16, 185, 129, 0.05), transparent 40%);
+  }
+
+  .admin-surface {
+    @apply rounded-2xl border border-slate-200/90 bg-white shadow-sm shadow-slate-200/40;
+  }
+
+  .admin-surface-elevated {
+    @apply rounded-2xl border border-slate-200/80 bg-white shadow-md shadow-slate-300/30;
+  }
+
+  .admin-page-header {
+    @apply mb-8;
+  }
+
+  .admin-page-title {
+    @apply text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl;
+  }
+
+  .admin-page-sub {
+    @apply mt-1.5 max-w-2xl text-sm leading-relaxed text-slate-500;
+  }
+
+  .admin-input {
+    @apply w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 shadow-inner shadow-slate-100/80 placeholder:text-slate-400 focus:border-rose-400 focus:outline-none focus:ring-2 focus:ring-rose-500/20;
+  }
+
+  .admin-filter-chip {
+    @apply inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-3.5 py-1.5 text-sm font-medium text-slate-600 transition hover:border-rose-200 hover:bg-rose-50/80 hover:text-rose-800;
+  }
+
+  .admin-filter-chip-active {
+    @apply border-rose-300 bg-rose-50 text-rose-800 shadow-sm ring-1 ring-rose-200/60;
+  }
+
+  .admin-btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl border-0 bg-gradient-to-r from-rose-600 to-rose-500 px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-rose-500/25 transition hover:from-rose-500 hover:to-rose-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-500 disabled:opacity-50;
+  }
+
+  .admin-btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50;
+  }
+
+  .admin-table-wrap {
+    @apply admin-surface overflow-hidden;
+  }
+
+  .admin-table {
+    @apply w-full min-w-[720px] text-left text-sm;
+  }
+
+  .admin-thead {
+    @apply border-b border-slate-100 bg-slate-50/80 text-xs font-semibold uppercase tracking-wider text-slate-500;
+  }
+
+  .admin-td {
+    @apply border-b border-slate-50 px-4 py-3.5 text-slate-700;
+  }
+
+  .admin-table tbody tr {
+    @apply transition hover:bg-rose-50/30;
+  }
+
+  .admin-badge {
+    @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium;
+  }
+
+  .admin-badge-rose {
+    @apply admin-badge bg-rose-100 text-rose-800;
+  }
+  .admin-badge-slate {
+    @apply admin-badge bg-slate-100 text-slate-700;
+  }
+  .admin-badge-amber {
+    @apply admin-badge bg-amber-100 text-amber-900;
+  }
+  .admin-badge-emerald {
+    @apply admin-badge bg-emerald-100 text-emerald-800;
+  }
+
+  .admin-modal-overlay {
+    @apply fixed inset-0 z-50 flex items-end justify-center bg-slate-900/50 p-4 backdrop-blur-sm sm:items-center;
+  }
+
+  .admin-modal {
+    @apply relative z-10 w-full max-w-lg overflow-hidden rounded-2xl border border-slate-200/80 bg-white p-0 shadow-2xl;
+  }
+}
+
+/* legacy .panel for pages not yet migrated */
+.panel {
+  @apply admin-surface p-0;
+}
+.panel-title {
+  @apply text-base font-semibold text-slate-900;
+}

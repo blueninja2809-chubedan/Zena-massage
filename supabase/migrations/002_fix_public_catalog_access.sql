@@ -49,11 +49,3 @@ select
   'Nguyen Thi Huong', 'huong@gmail.com', '0912345678', 'female', 5, array['massage','spa'],
   250000, 4.8, 150, true, array['Vietnamese','English'], 'TP Ho Chi Minh'
 where not exists (select 1 from public.therapists);
-
-insert into public.promotions (
-  code, description, discount_percent, max_discount_amount, min_order_amount, expiry_date, max_uses, current_uses, conditions, is_active
-)
-select
-  'WELCOME50', 'Discount cho khach hang moi', 50, 150000, 0, '2027-12-31T23:59:59.000Z'::timestamptz,
-  100, 0, array[]::text[], true
-where not exists (select 1 from public.promotions where code = 'WELCOME50');

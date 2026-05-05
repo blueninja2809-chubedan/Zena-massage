@@ -74,36 +74,8 @@ export const seedDatabase = async (): Promise<SeedResult> => {
       },
     ];
 
-    const promotions = [
-      {
-        code: 'WELCOME50',
-        description: 'Discount cho khach hang moi',
-        discount_percent: 50,
-        max_discount_amount: 150000,
-        min_order_amount: 0,
-        expiry_date: '2027-12-31T23:59:59.000Z',
-        max_uses: 100,
-        current_uses: 0,
-        conditions: [],
-        is_active: true,
-      },
-      {
-        code: 'SUMMER30',
-        description: 'Giam gia mua he',
-        discount_percent: 30,
-        max_discount_amount: 100000,
-        min_order_amount: 300000,
-        expiry_date: '2027-08-31T23:59:59.000Z',
-        max_uses: 50,
-        current_uses: 5,
-        conditions: [],
-        is_active: true,
-      },
-    ];
-
     await supabase.from('services').insert(services);
     await supabase.from('therapists').insert(therapists);
-    await supabase.from('promotions').insert(promotions);
 
     console.log('Supabase seed completed.');
     return { success: true, message: 'All data imported successfully' };

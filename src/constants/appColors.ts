@@ -1,34 +1,37 @@
 /**
- * Chủ đề nâu cát (warm sand) + xanh lam nhạt — spa ấm, dễ đọc.
+ * Chủ đề nâu nhạt + kem sáng.
  */
 export const AppColors = {
-  // Airy sand-brown + minty-blue accent (nhạt, hiện đại)
-  primary: '#D0A57C',
-  primaryDark: '#A77A53',
-  primaryMuted: '#C6A183',
-  primarySoft: '#F1E3D2',
-  primarySoft2: '#F7EFE5',
+  // Nâu chủ đạo
+  primary: '#9C6B3F',      // nâu chính
+  primaryDark: '#7A5230',  // nâu đậm
+  primaryMuted: '#B48357', // nâu trung bình
+  primarySoft: '#E8D6C3',  // kem nâu nhẹ
+  primarySoft2: '#F7EEE6', // kem nâu rất nhạt
 
-  accent: '#6B9DC8',
-  accentMuted: '#8EB4D4',
-  accentSoft: '#E0F2FF',
-  accentSoft2: '#EDF6FC',
+  // Accent xanh lá
+  accent: '#0DB46C',
+  accentMuted: '#31C684',
+  accentSoft: '#E7F8F0',
+  accentSoft2: '#F2FCF7',
 
-  bg: '#FCF7F2',
-  bgAlt: '#EEF6FC',
+  // Nền kem sáng
+  bg: '#F6F1EA',
+  bgAlt: '#FBF7F2',
 
-  text: '#1F1B16',
-  textMuted: '#6B5F52',
-  border: '#D4C4B6',
+  text: '#2F241C',
+  textMuted: '#7C6A5B',
+  border: '#E8DDD1',
 
-  light: '#D4A574',
+  light: '#C99A6F', // nâu nhạt / highlight
 
-  danger: '#B85C54',
-  dangerBg: '#F5E6E4',
-  dangerSoft: '#EDD8D6',
+  // Đỏ tag NEW / cảnh báo
+  danger: '#E84E4E',
+  dangerBg: '#FDEBEC',
+  dangerSoft: '#F8D9DB',
 
-  success: '#3D8B63',
-  successBg: '#E3F2E9',
+  success: '#0DB46C',
+  successBg: '#E7F8F0',
 
   white: '#FFFFFF',
 } as const;

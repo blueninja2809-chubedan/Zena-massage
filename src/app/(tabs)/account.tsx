@@ -1,22 +1,36 @@
-import AdminChatPanel from '@/components/AdminChatPanel';
-import { SignInScreen } from '@/components/SignInScreen';
-import { SignUpScreen } from '@/components/SignUpScreen';
+import Feather from '@expo/vector-icons/Feather';
+import AppNoticeModal from '@/components/AppNoticeModal';
+import { PhoneSignInScreen } from '@/components/PhoneSignInScreen';
+import { PhoneSignUpScreen } from '@/components/PhoneSignUpScreen';
 import VipMembershipScreen from '@/components/VipMembershipScreen';
 import { SERVICE_TYPES, VIETNAM_PROVINCES } from '@/constants/bookingFilters';
+import { isAdminPhone } from '@/constants/adminAccount';
 import { AppColors } from '@/constants/appColors';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { useReviewMode } from '@/contexts/ReviewModeContext';
 import { UserData, useUser } from '@/contexts/UserContext';
 import { useTabletLayout } from '@/hooks/use-tablet-layout';
-import { checkTherapistMinBalance, createPartnerApplication, getTherapistAvailability, updateTherapistAvailability } from '@/lib/supabaseService';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+  accountDeletionUsesOAuthSession,
+  createPartnerApplication,
+  deleteUserAccountOnServer,
+  ensurePublicPartnerImageUris,
+  signInUserAccountWithPhone,
+  signUpWithPhone,
+  upsertUserProfile,
+} from '@/lib/supabaseService';
+import { debugLog } from '@/lib/debugLog';
+import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
     Alert,
     FlatList,
     Image,
+    KeyboardAvoidingView,
     Modal,
+    Platform,
     ScrollView,
     StatusBar,
     StyleSheet,
@@ -41,7 +55,15 @@ const COLORS = {
   red: AppColors.danger,
 };
 
+/** Cùng tông với icon tab bar (Feather outline). */
+const NAV_ICON = '#6B5F52';
+
+type FeatherIconName = React.ComponentProps<typeof Feather>['name'];
+
 const VN_PROVINCES = VIETNAM_PROVINCES.map((p) => (p === 'TP.HCM' ? 'TP. Hồ Chí Minh' : p));
+
+/** Cùng danh mục tỉnh/thành với màn đăng ký SĐT (PhoneSignUpScreen). */
+const PROFILE_PROVINCE_SET = new Set(VIETNAM_PROVINCES as readonly string[]);
 
 const THERAPIST_SERVICE_OPTIONS = SERVICE_TYPES.filter((name) => name !== 'Tất cả');
 
@@ -107,65 +129,254 @@ const LEGACY_SERVICE_MAP: Record<string, string> = {
   'Chăm sóc da': 'Tắm tẩy tế bào chết toàn thân Hàn Quốc',
 };
 
+function toAuthUserData(profile: Record<string, unknown>): UserData {
+  const base = profile as Partial<UserData>;
+  const createdAt =
+    typeof base.createdAt === 'string' && base.createdAt.trim()
+      ? base.createdAt
+      : new Date().toISOString();
+  const isAdminByRole = base.role === 'admin';
+  const isAdminByPhone = isAdminPhone(base.phoneNumber);
+  const normalizedRole = isAdminByRole || isAdminByPhone
+    ? 'admin'
+    : base.role === 'therapist'
+      ? 'therapist'
+      : 'customer';
+
+  return {
+    ...base,
+    createdAt,
+    role: normalizedRole,
+    partnerApplicationStatus:
+      base.partnerApplicationStatus === 'pending' ||
+      base.partnerApplicationStatus === 'approved' ||
+      base.partnerApplicationStatus === 'rejected'
+        ? base.partnerApplicationStatus
+        : 'none',
+  };
+}
+
+function normalizeVietnameseText(value: string, maxChars: number): string {
+  const normalized = value.normalize('NFC');
+  const chars = Array.from(normalized);
+  if (chars.length <= maxChars) {
+    return normalized;
+  }
+  return chars.slice(0, maxChars).join('');
+}
+
+function getErrorMessage(
+  error: unknown,
+  fallbackMessage: string,
+): string {
+  let raw = '';
+  if (error instanceof Error && error.message.trim()) raw = error.message;
+  else if (
+    typeof error === 'object' &&
+    error !== null &&
+    'message' in error &&
+    typeof (error as { message?: unknown }).message === 'string'
+  ) {
+    raw = (error as { message: string }).message.trim();
+  }
+  if (!raw) return fallbackMessage;
+  if (
+    raw.includes('partner_applications_user_id_fkey') ||
+    (raw.includes('foreign key') && raw.includes('partner_applications'))
+  ) {
+    return 'Máy chủ chưa cập nhật cấu hình tài khoản. Vui lòng thử lại sau hoặc liên hệ hỗ trợ.';
+  }
+  if (raw === 'partner-image-read-failed') {
+    return 'Không đọc được ảnh. Vui lòng chọn lại hoặc thử ảnh khác.';
+  }
+  if (raw === 'missing-supabase-config') {
+    return 'Ứng dụng chưa cấu hình máy chủ. Vui lòng liên hệ hỗ trợ.';
+  }
+  return raw;
+}
+
+function getAccountDeleteErrorMessage(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error || '');
+  if (raw.includes('invalid_credentials')) {
+    return 'Mật khẩu không đúng. Vui lòng kiểm tra lại.';
+  }
+  if (raw.includes('not_authenticated') || raw.includes('missing_auth')) {
+    return 'Phiên đăng nhập không hợp lệ. Vui lòng đăng nhập lại.';
+  }
+  if (raw.includes('crypt(') || raw.includes('pgcrypto')) {
+    return 'Máy chủ chưa sẵn sàng để xác nhận mật khẩu. Vui lòng thử lại sau.';
+  }
+  return raw.trim() || 'Đã xảy ra lỗi. Vui lòng thử lại.';
+}
+
+function getPhoneSignUpErrorMessage(error: unknown): string {
+  const raw =
+    error instanceof Error
+      ? error.message
+      : typeof error === 'object' && error !== null
+        ? String((error as { message?: unknown }).message ?? '')
+        : String(error || '');
+  const code =
+    typeof error === 'object' && error !== null && 'code' in error
+      ? String((error as { code?: unknown }).code ?? '')
+      : '';
+  const details =
+    typeof error === 'object' && error !== null && 'details' in error
+      ? String((error as { details?: unknown }).details ?? '')
+      : '';
+  const hint =
+    typeof error === 'object' && error !== null && 'hint' in error
+      ? String((error as { hint?: unknown }).hint ?? '')
+      : '';
+  const combined = `${raw} ${details} ${hint} ${code}`.toLowerCase();
+  const msg = combined.trim();
+
+  if (msg.includes('phone_already_registered') || (code.toLowerCase() === 'p0001' && msg.includes('phone_already'))) {
+    return 'Số điện thoại đã tồn tại. Vui lòng đăng nhập.';
+  }
+  if (msg.includes('signup_no_uid_response')) {
+    return 'Máy chủ không trả về mã tài khoản sau khi đăng ký. Hãy cập nhật app/kiểm tra Supabase rồi thử lại.';
+  }
+  if (
+    msg.includes('could not find the function') ||
+    (msg.includes('pgrst202') && (msg.includes('rpc') || msg.includes('signup_with_phone') || msg.includes('signin_with_phone'))) ||
+    (msg.includes('schema cache') && (msg.includes('rpc') || msg.includes('postgrest'))) ||
+    /signup_with_phone|signin_with_phone/.test(msg) && (msg.includes('does not exist') || msg.includes('not found') || msg.includes('undefined'))
+  ) {
+    return 'Thiếu RPC đăng ký trên Supabase (signup_with_phone/signin_with_phone). Hãy chạy migration DB rồi thử lại.';
+  }
+  if (msg.includes('pgcrypto') || msg.includes('gen_salt') || msg.includes('crypt(')) {
+    return 'Máy chủ xác thực chưa sẵn sàng. Vui lòng thử lại sau.';
+  }
+  if (
+    msg.includes('permission denied') ||
+    msg.includes('not allowed') ||
+    msg.includes('insufficient privilege') ||
+    code === '42501'
+  ) {
+    return 'Máy chủ chưa cấp quyền đăng ký. Vui lòng cập nhật quyền trên Supabase rồi thử lại.';
+  }
+  if (
+    msg.includes("relation 'profiles' does not exist") ||
+    msg.includes('relation "profiles" does not exist')
+  ) {
+    return 'Bảng hồ sơ (profiles) chưa có trên Supabase. Cần chạy migration.';
+  }
+  if (msg.includes('network') || msg.includes('failed to fetch') || msg.includes('timeout')) {
+    return 'Không kết nối được máy chủ. Vui lòng kiểm tra mạng và thử lại.';
+  }
+  if (msg.includes('native module')) {
+    return 'Lỗi nội bộ ứng dụng (native). Hãy cập nhật bản build mới nhất hoặc thử lại sau.';
+  }
+  if (msg.includes('invalid input syntax for type uuid')) {
+    return 'Dữ liệu tài khoản chưa hợp lệ trên máy chủ. Vui lòng thử lại sau.';
+  }
+  if (msg.includes('upsertuserprofile')) {
+    const tail = raw.replace(/^upsertUserProfile:\s*/i, '').trim().slice(0, 320);
+    return tail
+      ? `Không lưu được hồ sơ sau đăng ký: ${tail}`
+      : 'Không lưu được họ tên, tuổi hoặc khu vực lên máy chủ. Kiểm tra kết nối hoặc thử lại.';
+  }
+
+  return raw.trim() || details.trim() || hint.trim() || 'Đăng ký thất bại. Vui lòng thử lại.';
+}
+
+type NoticeModalState = {
+  visible: boolean;
+  title: string;
+  message: string;
+  variant: 'default' | 'success' | 'danger';
+};
+
+const DEFAULT_NOTICE_STATE: NoticeModalState = {
+  visible: false,
+  title: '',
+  message: '',
+  variant: 'default',
+};
+
 export default function AccountScreen() {
+  const tabBarBottomInset = useBottomTabBarHeight();
   const { language, setLanguage } = useLanguage();
+  const { hideVipSubscription } = useReviewMode();
   const { user, setUser, logout } = useUser();
   const router = useRouter();
   const [currentScreen, setCurrentScreen] = useState<
-    'account' | 'signin' | 'signup' | 'profile' | 'therapistSetup' | 'vipMembership' | 'partnerSignupType' | 'partnerBusinessSignup' | 'adminChat'
+    'account' | 'signin' | 'signup' | 'profile' | 'therapistSetup' | 'vipMembership' | 'partnerSignupType' | 'partnerBusinessSignup'
   >('account');
   const [country] = useState({ code: 'VN', label: 'Việt Nam', flag: '\uD83C\uDDFB\uD83C\uDDF3' });
-  const [profileVisible, setProfileVisible] = useState(true);
   const tabletLayout = useTabletLayout();
 
-  useEffect(() => {
-    if (user?.authUid && user?.role === 'therapist') {
-      getTherapistAvailability(user.authUid)
-        .then(setProfileVisible)
-        .catch(() => {});
+  const handlePhoneSignIn = async (payload: { phone: string; password: string }) => {
+    const profile = await signInUserAccountWithPhone(payload.phone, payload.password);
+    if (!profile) {
+      throw new Error('Số điện thoại hoặc mật khẩu không đúng.');
     }
-  }, [user?.authUid, user?.role]);
+    await setUser(toAuthUserData(profile));
+    setCurrentScreen('account');
+  };
 
-  const handleToggleProfileVisible = async (value: boolean) => {
-    if (!user?.authUid) return;
-
-    // If turning ON, check minimum balance (500.000đ)
-    if (value) {
-      try {
-        const hasMinBalance = await checkTherapistMinBalance(user.authUid, 500000);
-        if (!hasMinBalance) {
-          Alert.alert(
-            'Số dư không đủ',
-            'Bạn cần có ít nhất 500.000đ trong ví để hiện hồ sơ nhận việc. Vui lòng nạp tiền vào ví.',
-          );
-          return;
-        }
-      } catch {
-        // If check fails, allow toggle
-      }
-    }
-
-    setProfileVisible(value);
+  const handlePhoneSignUp = async (payload: {
+    displayName: string;
+    phone: string;
+    password: string;
+    area: string;
+    age: number;
+  }) => {
     try {
-      await updateTherapistAvailability(user.authUid, value);
-    } catch {
-      setProfileVisible(!value);
+      await signUpWithPhone(payload.phone, payload.password);
+    } catch (e) {
+      debugLog('PhoneSignUp', 'signUpWithPhone failed', e);
+      throw new Error(getPhoneSignUpErrorMessage(e));
+    }
+
+    try {
+      const profile = await signInUserAccountWithPhone(payload.phone, payload.password);
+      if (!profile) {
+        throw new Error('Không thể tạo tài khoản. Vui lòng thử lại.');
+      }
+
+      const nextUser = toAuthUserData(profile);
+      if (payload.displayName.trim()) {
+        nextUser.displayName = payload.displayName.trim();
+      }
+      if (payload.area.trim()) {
+        nextUser.selectedCity = payload.area.trim();
+      }
+      if (Number.isFinite(payload.age) && payload.age > 0) {
+        nextUser.age = payload.age;
+      }
+      // Lưu họ tên / tuổi / khu vực lên Supabase trước khi cache local — nếu lỗi phải báo, không nuốt lỗi như setUser.
+      try {
+        await upsertUserProfile(nextUser as Record<string, unknown>);
+      } catch (syncErr) {
+        debugLog('PhoneSignUp', 'upsertUserProfile after signup failed', syncErr);
+        console.warn('[PhoneSignUp] upsertUserProfile after signup failed', syncErr);
+        throw syncErr instanceof Error ? syncErr : new Error(String(syncErr));
+      }
+      await setUser(nextUser, { skipRemotePersist: true });
+      setCurrentScreen('account');
+    } catch (e) {
+      debugLog('PhoneSignUp', 'post-signup signIn or profile failed', e);
+      throw new Error(getPhoneSignUpErrorMessage(e));
     }
   };
 
   if (currentScreen === 'signin' || (!user && currentScreen === 'account')) {
     return (
-      <SignInScreen
-        onBack={() => setCurrentScreen('account')}
+      <PhoneSignInScreen
+        onBack={() => router.replace('/')}
         onNavigateSignUp={() => setCurrentScreen('signup')}
+        onSubmit={handlePhoneSignIn}
       />
     );
   }
   if (currentScreen === 'signup') {
     return (
-      <SignUpScreen
-        onBack={() => setCurrentScreen('account')}
+      <PhoneSignUpScreen
+        onBack={() => router.replace('/')}
         onNavigateSignIn={() => setCurrentScreen('signin')}
+        onSubmit={handlePhoneSignUp}
       />
     );
   }
@@ -175,12 +386,23 @@ export default function AccountScreen() {
         user={user}
         onBack={() => setCurrentScreen('account')}
         onSave={async (updatedUser) => {
-          await setUser(updatedUser);
-          setCurrentScreen('account');
-        }}
-        onDeleteAccount={async () => {
-          await AsyncStorage.clear();
-          await logout();
+          try {
+            await upsertUserProfile(updatedUser as Record<string, unknown>);
+          } catch (e) {
+            debugLog('ProfileDetails', 'upsertUserProfile failed', e);
+            const raw =
+              e instanceof Error
+                ? e.message
+                : String((e as { message?: string })?.message ?? e ?? '');
+            throw new Error(
+              /permission|pgrst|not allowed|insufficient|42501|upsert|rpc|column|timeout|fetch/i.test(
+                String(raw).toLowerCase(),
+              )
+                ? 'Không lưu được hồ sơ lên máy chủ. Kiểm tra mạng, quyền Supabase (upsert_profile) hoặc thử lại.'
+                : raw.trim() || 'Không lưu được hồ sơ. Vui lòng thử lại.',
+            );
+          }
+          await setUser(updatedUser, { skipRemotePersist: true });
           setCurrentScreen('account');
         }}
       />
@@ -192,13 +414,29 @@ export default function AccountScreen() {
         user={user}
         onBack={() => setCurrentScreen('account')}
         onSave={async (updatedUser) => {
-          await setUser(updatedUser);
+          try {
+            await upsertUserProfile(updatedUser as Record<string, unknown>);
+          } catch (e) {
+            debugLog('TherapistSetup', 'upsertUserProfile failed', e);
+            const raw =
+              e instanceof Error
+                ? e.message
+                : String((e as { message?: string })?.message ?? e ?? '');
+            throw new Error(
+              /permission|pgrst|not allowed|insufficient|42501|upsert|rpc|column|timeout|fetch/i.test(
+                String(raw).toLowerCase(),
+              )
+                ? 'Không lưu được hồ sơ lên máy chủ. Kiểm tra mạng, quyền Supabase (upsert_profile) hoặc thử lại.'
+                : raw.trim() || 'Không lưu được hồ sơ. Vui lòng thử lại.',
+            );
+          }
+          await setUser(updatedUser, { skipRemotePersist: true });
           setCurrentScreen('account');
         }}
       />
     );
   }
-  if (currentScreen === 'vipMembership' && user) {
+  if (currentScreen === 'vipMembership' && user && !hideVipSubscription) {
     return (
       <VipMembershipScreen onClose={() => setCurrentScreen('account')} />
     );
@@ -216,27 +454,30 @@ export default function AccountScreen() {
   if (currentScreen === 'partnerBusinessSignup') {
     return <BusinessPartnerSignupScreen language={language} onBack={() => setCurrentScreen('partnerSignupType')} />;
   }
-  if (currentScreen === 'adminChat') {
-    return <AdminChatPanel onClose={() => setCurrentScreen('account')} />;
-  }
-
   const displayName = user?.displayName || user?.phoneNumber || '';
+  const isAdminAccount = user?.role === 'admin' || isAdminPhone(user?.phoneNumber);
   const langLabel = language === 'vi' ? 'Tiếng Việt' : 'English';
   const genderLabel = user?.gender === 'female' ? 'Nữ' : user?.gender === 'male' ? 'Nam' : '';
   const avatarInitials = getInitials(displayName || 'Zena');
-  const roleLabel = user?.role === 'therapist'
-    ? 'Kỹ thuật viên'
-    : user?.partnerApplicationStatus === 'pending'
-      ? 'Khách hàng (chờ duyệt đối tác)'
-      : 'Khách hàng';
   const vipLabel = user?.isVipMember ? 'Hội viên VIP' : 'Đăng ký trở thành hội viên';
 
+  const handleDeleteAccount = async (password?: string) => {
+    if (!user) return;
+    await deleteUserAccountOnServer(user, password);
+    await logout();
+    Alert.alert('Đã xóa tài khoản', 'Dữ liệu tài khoản trên hệ thống đã được gỡ.');
+  };
+
   const rewardPromoCard = (
-    <TouchableOpacity style={s.promoRewardCard} activeOpacity={0.85}>
+    <TouchableOpacity
+      style={s.promoRewardCard}
+      activeOpacity={0.85}
+      onPress={() => Alert.alert('Sắp ra mắt', 'Tính năng này sắp ra mắt.')}
+    >
       <Image
         source={require('@/assets/images/promo-reward-banner.png')}
         style={s.promoRewardBannerImg}
-        resizeMode={tabletLayout.isTablet ? 'contain' : 'cover'}
+        resizeMode="cover"
       />
     </TouchableOpacity>
   );
@@ -246,7 +487,7 @@ export default function AccountScreen() {
       <Image
         source={require('@/assets/images/ktv2.png')}
         style={s.promoRewardBannerImg}
-        resizeMode={tabletLayout.isTablet ? 'contain' : 'cover'}
+        resizeMode="cover"
       />
     </TouchableOpacity>
   ) : (
@@ -254,23 +495,19 @@ export default function AccountScreen() {
       <Image
         source={require('@/assets/images/promo-partner-banner.png')}
         style={s.promoRewardBannerImg}
-        resizeMode={tabletLayout.isTablet ? 'contain' : 'cover'}
+        resizeMode="cover"
       />
     </TouchableOpacity>
   );
 
-  const handleRoleInfo = () => {
-    Alert.alert(
-      'Vai trò tài khoản',
-      'Tài khoản mới luôn là Khách hàng. Để trở thành Kỹ thuật viên, bạn cần gửi đăng ký đối tác và chờ quản trị viên duyệt.',
-    );
-  };
-
   if (user?.role === 'therapist') {
     return (
-      <SafeAreaView style={s.therapistContainer} edges={['top']}>
+      <SafeAreaView style={s.therapistContainer} edges={['top', 'left', 'right']}>
         <StatusBar barStyle="dark-content" backgroundColor={COLORS.white} />
-        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 34 }}>
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{ paddingBottom: tabBarBottomInset + 24 }}
+        >
           <View style={s.therapistTop}>
             <View style={s.profileHeader}>
               <View style={s.avatarCircle}>
@@ -281,16 +518,25 @@ export default function AccountScreen() {
                 )}
               </View>
               <View style={s.profileInfo}>
-                <Text style={s.profileName}>{displayName}</Text>
+                <View style={s.profileNameRow}>
+                  <Text style={s.profileName}>{displayName}</Text>
+                  {isAdminAccount ? (
+                    <View style={s.adminBadge}>
+                      <Text style={s.adminBadgeText}>✓</Text>
+                    </View>
+                  ) : null}
+                </View>
                 <Text style={s.profilePhone}>{user.email || user.phoneNumber || ''}</Text>
               </View>
             </View>
 
-            <TouchableOpacity style={s.vipBanner} activeOpacity={0.85} onPress={() => setCurrentScreen('vipMembership')}>
-              <Text style={s.vipIcon}>👑</Text>
-              <Text style={s.vipText}>{vipLabel}</Text>
-              <View style={s.vipBadge}><Text style={s.vipBadgeText}>VIP</Text></View>
-            </TouchableOpacity>
+            {!hideVipSubscription ? (
+              <TouchableOpacity style={s.vipBanner} activeOpacity={0.85} onPress={() => setCurrentScreen('vipMembership')}>
+                <Feather name="award" size={20} color={COLORS.gold} />
+                <Text style={s.vipText}>{vipLabel}</Text>
+                <View style={s.vipBadge}><Text style={s.vipBadgeText}>VIP</Text></View>
+              </TouchableOpacity>
+            ) : null}
 
             <View style={[s.promoRow, tabletLayout.isTablet && s.promoRowTablet]}>
               {partnerPromoCard}
@@ -299,22 +545,31 @@ export default function AccountScreen() {
           </View>
 
           <View style={s.menuCard}>
-            <MenuRow icon="📋" label="Lịch sử hoạt động" onPress={() => router.push('/activity')} />
-            <MenuRow icon="👤" label="Thông tin cá nhân" onPress={() => setCurrentScreen('profile')} />
-            <MenuRow icon="🌐" label="Ngôn ngữ" value={langLabel} onPress={() => setLanguage(language === 'vi' ? 'en' : 'vi')} />
-            <MenuRow icon="🏳️" label="Quốc gia" value={`${country.flag} ${country.label}`} onPress={() => {}} />
-            <MenuRow icon="ℹ️" label="Về chúng tôi" onPress={() => Alert.alert('Zena', 'Phiên bản 1.0.0')} />
-            <MenuRow icon="🚪" label="Đăng xuất" onPress={logout} color={COLORS.text} isLast />
+            <MenuRow icon="package" label="Lịch sử đơn hàng" onPress={() => router.push('/therapist-order-history')} />
+            <MenuRow icon="user" label="Thông tin cá nhân" onPress={() => setCurrentScreen('profile')} />
+            <MenuRow icon="globe" label="Ngôn ngữ" value={langLabel} onPress={() => setLanguage(language === 'vi' ? 'en' : 'vi')} />
+            <MenuRow icon="flag" label="Quốc gia" value={`${country.flag} ${country.label}`} onPress={() => {}} />
+            <MenuRow icon="info" label="Về chúng tôi" onPress={() => Alert.alert('Zena', 'Phiên bản 1.0.0')} isLast />
           </View>
+
+          <TouchableOpacity style={s.logoutBtn} onPress={logout} activeOpacity={0.85}>
+            <Feather name="log-out" size={18} color={COLORS.red} />
+            <Text style={s.logoutBtnText}>Đăng xuất</Text>
+          </TouchableOpacity>
+
+          <AccountDeleteEntry user={user} onDeleteComplete={handleDeleteAccount} />
         </ScrollView>
       </SafeAreaView>
     );
   }
 
   return (
-    <SafeAreaView style={s.container} edges={['top']}>
+    <SafeAreaView style={s.container} edges={['top', 'left', 'right']}>
       <StatusBar barStyle="dark-content" backgroundColor={COLORS.white} />
-      <ScrollView showsVerticalScrollIndicator={false}>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ paddingBottom: tabBarBottomInset + 24 }}
+      >
 
         {/*  LOGGED IN VIEW  */}
         {user ? (
@@ -329,18 +584,27 @@ export default function AccountScreen() {
                 )}
               </View>
               <View style={s.profileInfo}>
-                <Text style={s.profileName}>{displayName}</Text>
+                <View style={s.profileNameRow}>
+                  <Text style={s.profileName}>{displayName}</Text>
+                  {isAdminAccount ? (
+                    <View style={s.adminBadge}>
+                      <Text style={s.adminBadgeText}>✓</Text>
+                    </View>
+                  ) : null}
+                </View>
                 {(user.email || user.phoneNumber) && <Text style={s.profilePhone}>{user.email || user.phoneNumber}</Text>}
                 {genderLabel ? <Text style={s.profileGender}>{genderLabel}</Text> : null}
               </View>
             </View>
 
             {/* VIP Banner */}
-            <TouchableOpacity style={s.vipBanner} activeOpacity={0.85} onPress={() => setCurrentScreen('vipMembership')}>
-              <Text style={s.vipIcon}>👑</Text>
-              <Text style={s.vipText}>{vipLabel}</Text>
-              <View style={s.vipBadge}><Text style={s.vipBadgeText}>VIP</Text></View>
-            </TouchableOpacity>
+            {!hideVipSubscription ? (
+              <TouchableOpacity style={s.vipBanner} activeOpacity={0.85} onPress={() => setCurrentScreen('vipMembership')}>
+                <Feather name="award" size={20} color={COLORS.gold} />
+                <Text style={s.vipText}>{vipLabel}</Text>
+                <View style={s.vipBadge}><Text style={s.vipBadgeText}>VIP</Text></View>
+              </TouchableOpacity>
+            ) : null}
 
             {/* Promo cards */}
             <View style={[s.promoRow, tabletLayout.isTablet && s.promoRowTablet]}>
@@ -350,21 +614,22 @@ export default function AccountScreen() {
 
             {/* Menu */}
             <View style={s.menuCard}>
-              <MenuRow icon="📋" label="Lịch sử hoạt động" onPress={() => router.push('/activity')} />
-              <MenuRow icon="👤" label="Thông tin cá nhân" onPress={() => setCurrentScreen('profile')} />
-              <MenuRow icon="🌐" label="Ngôn ngữ" value={langLabel} onPress={() => setLanguage(language === 'vi' ? 'en' : 'vi')} />
-              <MenuRow icon="🏳️" label="Quốc gia" value={`${country.flag} ${country.label}`} onPress={() => {}} />
-              <MenuRow icon="ℹ️" label="Về chúng tôi" onPress={() => Alert.alert('Zena', 'Phiên bản 1.0.0\n\nỨng dụng đặt lịch massage và spa tại nhà.\n\n© 2026 Zena. All rights reserved.')} isLast />
+              <MenuRow icon="clock" label="Lịch sử hoạt động" onPress={() => router.push('/activity')} />
+              <MenuRow icon="user" label="Thông tin cá nhân" onPress={() => setCurrentScreen('profile')} />
+              <MenuRow icon="globe" label="Ngôn ngữ" value={langLabel} onPress={() => setLanguage(language === 'vi' ? 'en' : 'vi')} />
+              <MenuRow icon="flag" label="Quốc gia" value={`${country.flag} ${country.label}`} onPress={() => {}} />
+              <MenuRow icon="info" label="Về chúng tôi" onPress={() => Alert.alert('Zena', 'Phiên bản 1.0.0\n\nỨng dụng đặt lịch massage và spa tại nhà.\n\n© 2026 Zena. All rights reserved.')} isLast />
             </View>
 
             {/* Logout */}
             <TouchableOpacity style={s.logoutBtn} onPress={logout} activeOpacity={0.85}>
-              <Text style={s.logoutBtnText}>🚪  Đăng xuất</Text>
+              <Feather name="log-out" size={18} color={COLORS.red} />
+              <Text style={s.logoutBtnText}>Đăng xuất</Text>
             </TouchableOpacity>
+
+            <AccountDeleteEntry user={user} onDeleteComplete={handleDeleteAccount} />
           </>
         ) : null}
-
-        <View style={{ height: 40 }} />
       </ScrollView>
     </SafeAreaView>
   );
@@ -385,7 +650,7 @@ function PartnerSignupTypeScreen({
   const title = isEn ? 'What would you like to register as?' : 'Bạn muốn đăng ký làm gì?';
 
   return (
-    <SafeAreaView style={s.partnerContainer} edges={['top']}>
+    <SafeAreaView style={s.partnerContainer} edges={['top', 'left', 'right', 'bottom']}>
       <StatusBar barStyle="dark-content" backgroundColor="#F8FAFC" />
 
       <View style={s.partnerHeader}>
@@ -410,7 +675,7 @@ function PartnerSignupTypeScreen({
             </Text>
           </View>
           <View style={s.partnerOptionIconWrap}>
-            <Text style={s.partnerOptionIcon}>🧑‍⚕️</Text>
+            <Feather name="user" size={26} color={AppColors.primaryDark} />
           </View>
         </TouchableOpacity>
 
@@ -426,7 +691,7 @@ function PartnerSignupTypeScreen({
             </Text>
           </View>
           <View style={s.partnerOptionIconWrap}>
-            <Text style={s.partnerOptionIcon}>🏢</Text>
+            <Feather name="briefcase" size={26} color={AppColors.primaryDark} />
           </View>
         </TouchableOpacity>
       </View>
@@ -454,6 +719,7 @@ function BusinessPartnerSignupScreen({
   const [weekendStart, setWeekendStart] = useState('');
   const [weekendEnd, setWeekendEnd] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  const [notice, setNotice] = useState<NoticeModalState>(DEFAULT_NOTICE_STATE);
 
   const cityOptions = VN_PROVINCES;
   const filteredCities = cityOptions.filter((item) =>
@@ -491,30 +757,32 @@ function BusinessPartnerSignupScreen({
   };
 
   const valid = branchImages.length >= 2 && !!branchName.trim() && !!branchAddress.trim() && !!city.trim();
+  const showNotice = (next: Omit<NoticeModalState, 'visible'>) => {
+    setNotice({ ...next, visible: true });
+  };
 
   const save = async () => {
     if (!user?.phoneNumber) {
-      Alert.alert(
-        isEn ? 'Sign in required' : 'Cần đăng nhập',
-        isEn
-          ? 'Please sign in before submitting partner registration.'
-          : 'Vui lòng đăng ký trước khi gửi đăng ký đối tác.',
-      );
+      showNotice({
+        title: 'Cần đăng nhập',
+        message: 'Vui lòng đăng nhập trước khi gửi hồ sơ đối tác.',
+        variant: 'default',
+      });
       return;
     }
 
     if (!valid) {
-      Alert.alert(
-        isEn ? 'Missing required fields' : 'Thiếu thông tin bắt buộc',
-        isEn
-          ? 'Please add at least 2 branch images and fill all required fields.'
-          : 'Vui lòng thêm ít nhất 2 ảnh và điền đầy đủ các trường bắt buộc.',
-      );
+      showNotice({
+        title: 'Thiếu thông tin bắt buộc',
+        message: 'Vui lòng thêm ít nhất 2 ảnh và điền đầy đủ các trường bắt buộc.',
+        variant: 'danger',
+      });
       return;
     }
     setIsSaving(true);
     try {
       const applicationId = await createPartnerApplication({
+        userId: user.authUid,
         applicationType: 'business',
         phoneNumber: user.phoneNumber,
         displayName: user.displayName || branchName.trim(),
@@ -534,30 +802,36 @@ function BusinessPartnerSignupScreen({
 
       await setUser({
         ...user,
-        role: user.role === 'therapist' ? 'therapist' : 'customer',
+        role: user.role === 'therapist' ? 'therapist' : user.role === 'admin' ? 'admin' : 'customer',
         partnerApplicationId: applicationId,
         partnerApplicationStatus: 'pending',
       });
 
-      Alert.alert(
-        isEn ? 'Submitted for review' : 'Đã gửi chờ duyệt',
-        isEn
-          ? 'Your business partner registration and images were sent to admin for review.'
-          : 'Hồ sơ doanh nghiệp và hình ảnh của bạn đã được gửi lên quản trị để phê duyệt.',
+      showNotice({
+        title: '✅ Gửi hồ sơ thành công',
+        message: 'Hồ sơ doanh nghiệp và hình ảnh của bạn đã được gửi đến quản trị viên để phê duyệt.',
+        variant: 'success',
+      });
+    } catch (error) {
+      const message = getErrorMessage(
+        error,
+        'Không thể gửi hồ sơ. Vui lòng thử lại.',
       );
-      onBack();
-    } catch {
-      Alert.alert(
-        isEn ? 'Submit failed' : 'Gửi hồ sơ thất bại',
-        isEn ? 'Could not submit registration. Please try again.' : 'Không thể gửi hồ sơ. Vui lòng thử lại.',
-      );
+      showNotice({
+        title: '❌ Gửi hồ sơ thất bại',
+        message:
+          message === 'missing-user-id'
+            ? 'Không tìm thấy phiên đăng nhập. Vui lòng đăng nhập lại rồi gửi hồ sơ.'
+            : message,
+        variant: 'danger',
+      });
     } finally {
       setIsSaving(false);
     }
   };
 
   return (
-    <SafeAreaView style={s.partnerContainer} edges={['top']}>
+    <SafeAreaView style={s.partnerContainer} edges={['top', 'left', 'right', 'bottom']}>
       <StatusBar barStyle="dark-content" backgroundColor="#F8FAFC" />
       <View style={s.partnerHeader}>
         <TouchableOpacity style={s.backButton} onPress={onBack} activeOpacity={0.8}>
@@ -587,7 +861,7 @@ function BusinessPartnerSignupScreen({
                   </>
                 ) : (
                   <>
-                    <Text style={s.businessImagePlaceholderIcon}>🖼️</Text>
+                    <Feather name="image" size={28} color="#C5B8BB" />
                     <Text style={s.businessImagePlaceholderText}>{isEn ? 'Add image' : 'Thêm ảnh'}</Text>
                     <View style={s.businessPlusBadge}>
                       <Text style={s.businessPlusBadgeText}>+</Text>
@@ -614,6 +888,9 @@ function BusinessPartnerSignupScreen({
           placeholderTextColor="#9E8585"
           value={branchName}
           onChangeText={setBranchName}
+          autoCapitalize="words"
+          autoCorrect={false}
+          spellCheck={false}
         />
 
         <Text style={s.businessLabel}>{isEn ? 'Address' : 'Địa chỉ'} <Text style={s.requiredStar}>*</Text></Text>
@@ -623,6 +900,9 @@ function BusinessPartnerSignupScreen({
           placeholderTextColor="#9E8585"
           value={branchAddress}
           onChangeText={setBranchAddress}
+          autoCapitalize="sentences"
+          autoCorrect={false}
+          spellCheck={false}
         />
 
         <Text style={s.businessLabel}>{isEn ? 'Province/City' : 'Tỉnh/Thành phố'} <Text style={s.requiredStar}>*</Text></Text>
@@ -701,6 +981,9 @@ function BusinessPartnerSignupScreen({
               onChangeText={setCityQuery}
               placeholder={isEn ? 'Search province/city...' : 'Tìm tỉnh/thành...'}
               placeholderTextColor="#9E8585"
+              autoCapitalize="none"
+              autoCorrect={false}
+              spellCheck={false}
             />
 
             <FlatList
@@ -730,13 +1013,138 @@ function BusinessPartnerSignupScreen({
           </View>
         </View>
       </Modal>
+      <AppNoticeModal
+        visible={notice.visible}
+        title={notice.title}
+        message={notice.message}
+        primaryText={notice.variant === 'success' ? 'Về trang trước' : 'Đã hiểu'}
+        onPrimaryPress={() => {
+          const shouldGoBack = notice.variant === 'success';
+          setNotice(DEFAULT_NOTICE_STATE);
+          if (shouldGoBack) onBack();
+        }}
+        variant={notice.variant}
+      />
     </SafeAreaView>
   );
 }
 
+function AccountDeleteEntry({
+  user,
+  onDeleteComplete,
+}: {
+  user: UserData;
+  onDeleteComplete: (password?: string) => Promise<void>;
+}) {
+  const [showDeletePasswordModal, setShowDeletePasswordModal] = useState(false);
+  const [deletePassword, setDeletePassword] = useState('');
+  const [deleteBusy, setDeleteBusy] = useState(false);
+
+  const runDelete = async (password?: string) => {
+    setDeleteBusy(true);
+    try {
+      await onDeleteComplete(password);
+    } catch (e) {
+      Alert.alert('Không thể xóa tài khoản', getAccountDeleteErrorMessage(e));
+    } finally {
+      setDeleteBusy(false);
+    }
+  };
+
+  const handleDelete = () => {
+    Alert.alert(
+      'Xóa tài khoản',
+      'Tài khoản và dữ liệu liên quan (đặt lịch, địa chỉ, thông báo, ví…) sẽ bị xóa vĩnh viễn trên hệ thống. Bạn có chắc chắn?',
+      [
+        { text: 'Hủy', style: 'cancel' },
+        {
+          text: 'Tiếp tục',
+          style: 'destructive',
+          onPress: async () => {
+            const oauth = user.authUid
+              ? await accountDeletionUsesOAuthSession(user.authUid)
+              : false;
+            if (oauth) {
+              await runDelete();
+            } else {
+              setDeletePassword('');
+              setShowDeletePasswordModal(true);
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  return (
+    <>
+      <TouchableOpacity
+        style={s.accountDeleteBtn}
+        onPress={handleDelete}
+        activeOpacity={0.75}
+        disabled={deleteBusy}
+      >
+        <Feather name="trash-2" size={17} color={COLORS.red} />
+        <Text style={s.accountDeleteBtnText}>
+          {deleteBusy ? 'Đang xử lý...' : 'Xóa tài khoản'}
+        </Text>
+      </TouchableOpacity>
+
+      <Modal
+        visible={showDeletePasswordModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => !deleteBusy && setShowDeletePasswordModal(false)}
+      >
+        <View style={s.deleteModalBackdrop}>
+          <View style={s.deleteModalCard}>
+            <Text style={s.deleteModalTitle}>Xác nhận mật khẩu</Text>
+            <Text style={s.deleteModalHint}>
+              Nhập mật khẩu đăng nhập bằng số điện thoại để xóa tài khoản trên máy chủ.
+            </Text>
+            <TextInput
+              value={deletePassword}
+              onChangeText={setDeletePassword}
+              placeholder="Mật khẩu"
+              placeholderTextColor="#A0A0A0"
+              secureTextEntry
+              style={s.deleteModalInput}
+              editable={!deleteBusy}
+              autoCapitalize="none"
+              autoCorrect={false}
+              spellCheck={false}
+            />
+            <View style={s.deleteModalActions}>
+              <TouchableOpacity
+                style={s.deleteModalCancelBtn}
+                onPress={() => !deleteBusy && setShowDeletePasswordModal(false)}
+                activeOpacity={0.8}
+              >
+                <Text style={s.deleteModalCancelText}>Hủy</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={s.deleteModalConfirmBtn}
+                onPress={() => void runDelete(deletePassword)}
+                activeOpacity={0.85}
+                disabled={deleteBusy}
+              >
+                <Text style={s.deleteModalConfirmText}>{deleteBusy ? 'Đang xóa...' : 'Xóa vĩnh viễn'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </>
+  );
+}
+
 function MenuRow({ icon, label, value, onPress, color, isLast }: {
-  icon: string; label: string; value?: string;
-  onPress: () => void; color?: string; isLast?: boolean;
+  icon: FeatherIconName;
+  label: string;
+  value?: string;
+  onPress: () => void;
+  color?: string;
+  isLast?: boolean;
 }) {
   return (
     <TouchableOpacity
@@ -745,7 +1153,9 @@ function MenuRow({ icon, label, value, onPress, color, isLast }: {
       activeOpacity={0.7}
     >
       <View style={s.menuRowLeft}>
-        <View style={s.menuIconWrap}><Text style={s.menuIcon}>{icon}</Text></View>
+        <View style={s.menuIconWrap}>
+          <Feather name={icon} size={20} color={NAV_ICON} />
+        </View>
         <Text style={[s.menuLabel, color ? { color } : null]}>{label}</Text>
       </View>
       <View style={s.menuRowRight}>
@@ -760,20 +1170,31 @@ function ProfileDetailsScreen({
   user,
   onBack,
   onSave,
-  onDeleteAccount,
 }: {
   user: UserData;
   onBack: () => void;
   onSave: (user: UserData) => Promise<void>;
-  onDeleteAccount: () => Promise<void>;
 }) {
   const [displayName, setDisplayName] = useState(user.displayName || '');
   const [phoneNumber, setPhoneNumber] = useState(user.phoneNumber || '');
+  const [area, setArea] = useState(user.selectedCity?.trim() || '');
+  const [ageInput, setAgeInput] = useState(
+    user.age != null && Number(user.age) > 0 ? String(user.age) : '',
+  );
+  const [showProvinceModal, setShowProvinceModal] = useState(false);
+  const [provinceQuery, setProvinceQuery] = useState('');
   const [gender, setGender] = useState<'male' | 'female' | 'other'>(user.gender || 'other');
   const [nationality, setNationality] = useState(user.nationality || 'Việt Nam');
   const [password, setPassword] = useState(user.password || '');
   const [avatarUri, setAvatarUri] = useState(user.avatarUri || '');
   const [isSaving, setIsSaving] = useState(false);
+  const filteredProfileProvinces = useMemo(
+    () =>
+      VIETNAM_PROVINCES.filter((p) =>
+        p.toLowerCase().includes(provinceQuery.trim().toLowerCase()),
+      ),
+    [provinceQuery],
+  );
   const avatarInitials = getInitials(displayName || user.email || user.phoneNumber || 'Zena');
 
   const handlePickAvatar = async () => {
@@ -802,40 +1223,57 @@ function ProfileDetailsScreen({
       return;
     }
 
+    const ageTrim = ageInput.replace(/\D/g, '').slice(0, 2);
+    if (ageTrim.length > 0) {
+      const a = Number(ageTrim);
+      if (!Number.isFinite(a) || a < 16 || a > 90) {
+        Alert.alert('Độ tuổi', 'Nhập độ tuổi từ 16 đến 90, hoặc để trống.');
+        return;
+      }
+    }
+    if (area.trim() && !PROFILE_PROVINCE_SET.has(area.trim())) {
+      Alert.alert('Khu vực', 'Vui lòng chọn tỉnh/thành trong danh sách.');
+      return;
+    }
+
     setIsSaving(true);
     try {
+      const parsedAge = ageTrim.length > 0 ? Number(ageTrim) : undefined;
       await onSave({
         ...user,
         displayName: displayName.trim(),
         phoneNumber: phoneNumber.trim(),
+        selectedCity: area.trim() || undefined,
+        age: parsedAge,
         gender,
         nationality: nationality.trim(),
         password: password.trim(),
         avatarUri,
       });
       Alert.alert('Thành công', 'Thông tin tài khoản đã được cập nhật.');
+    } catch (e) {
+      const message =
+        e instanceof Error ? e.message.trim() : 'Không lưu được hồ sơ. Vui lòng thử lại.';
+      Alert.alert('Lỗi lưu hồ sơ', message);
     } finally {
       setIsSaving(false);
     }
   };
 
-  const handleDelete = () => {
-    Alert.alert('Xóa tài khoản', 'Bạn có chắc muốn xóa tài khoản khỏi thiết bị này không?', [
-      { text: 'Hủy', style: 'cancel' },
-      {
-        text: 'Xóa',
-        style: 'destructive',
-        onPress: async () => {
-          await onDeleteAccount();
-        },
-      },
-    ]);
-  };
-
   return (
-    <SafeAreaView style={s.container} edges={['top']}>
+    <SafeAreaView style={s.container} edges={['top', 'left', 'right', 'bottom']}>
       <StatusBar barStyle="dark-content" backgroundColor={COLORS.white} />
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={s.profileDetailsContent}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={{ flex: 1 }}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 12 : 0}
+      >
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={s.profileDetailsContent}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+      >
         <View style={s.profileDetailsHeader}>
           <TouchableOpacity style={s.backButton} onPress={onBack} activeOpacity={0.7}>
             <Text style={s.backButtonText}>←</Text>
@@ -853,7 +1291,7 @@ function ProfileDetailsScreen({
             )}
           </View>
           <TouchableOpacity style={s.cameraBadge} activeOpacity={0.8} onPress={handlePickAvatar}>
-            <Text style={s.cameraBadgeText}>📷</Text>
+            <Feather name="camera" size={15} color={NAV_ICON} />
           </TouchableOpacity>
         </View>
 
@@ -863,6 +1301,38 @@ function ProfileDetailsScreen({
               value={displayName}
               onChangeText={setDisplayName}
               placeholder="Nhập họ và tên"
+              placeholderTextColor="#A0A0A0"
+              style={s.profileInput}
+              autoCapitalize="words"
+              autoCorrect={false}
+              spellCheck={false}
+            />
+          </EditableRow>
+
+          <EditableRow label="Khu vực (tỉnh, thành)">
+            <TouchableOpacity
+              activeOpacity={0.7}
+              onPress={() => {
+                setProvinceQuery('');
+                setShowProvinceModal(true);
+              }}
+              style={s.profileSelectTouch}
+            >
+              <Text
+                style={[s.profileSelectText, !area.trim() && s.profileSelectPlaceholder]}
+                numberOfLines={2}
+              >
+                {area.trim() ? area.trim() : 'Chọn tỉnh, thành phố —'}
+              </Text>
+            </TouchableOpacity>
+          </EditableRow>
+
+          <EditableRow label="Độ tuổi">
+            <TextInput
+              value={ageInput}
+              onChangeText={(v) => setAgeInput(v.replace(/\D/g, '').slice(0, 2))}
+              keyboardType="number-pad"
+              placeholder="Ví dụ: 25"
               placeholderTextColor="#A0A0A0"
               style={s.profileInput}
             />
@@ -894,6 +1364,9 @@ function ProfileDetailsScreen({
               placeholder="Nhập quốc tịch"
               placeholderTextColor="#A0A0A0"
               style={s.profileInput}
+              autoCapitalize="words"
+              autoCorrect={false}
+              spellCheck={false}
             />
           </EditableRow>
 
@@ -921,11 +1394,69 @@ function ProfileDetailsScreen({
         <TouchableOpacity style={s.saveProfileButton} onPress={handleSave} activeOpacity={0.85}>
           <Text style={s.saveProfileButtonText}>{isSaving ? 'Đang lưu...' : 'Lưu thay đổi'}</Text>
         </TouchableOpacity>
-
-        <TouchableOpacity style={s.deleteAccountButton} onPress={handleDelete} activeOpacity={0.7}>
-          <Text style={s.deleteAccountButtonText}>Xóa tài khoản</Text>
-        </TouchableOpacity>
       </ScrollView>
+      </KeyboardAvoidingView>
+
+      <Modal
+        visible={showProvinceModal}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setShowProvinceModal(false)}
+      >
+        <TouchableOpacity
+          style={s.provinceModalRoot}
+          activeOpacity={1}
+          onPress={() => setShowProvinceModal(false)}
+        >
+          <View style={s.provinceModalCard} onStartShouldSetResponder={() => true}>
+            <Text style={s.provinceModalTitle}>Chọn tỉnh, thành phố</Text>
+            <TextInput
+              value={provinceQuery}
+              onChangeText={setProvinceQuery}
+              placeholder="Tìm tỉnh, thành phố…"
+              placeholderTextColor="#A0A0A0"
+              style={s.provinceModalSearch}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <FlatList
+              data={filteredProfileProvinces}
+              keyExtractor={(item) => item}
+              keyboardShouldPersistTaps="handled"
+              style={s.provinceModalList}
+              renderItem={({ item }) => {
+                const active = item === area;
+                return (
+                  <TouchableOpacity
+                    style={[s.provinceModalRow, active && s.provinceModalRowActive]}
+                    onPress={() => {
+                      setArea(item);
+                      setShowProvinceModal(false);
+                      setProvinceQuery('');
+                    }}
+                  >
+                    <Text
+                      style={[s.provinceModalRowText, active && s.provinceModalRowTextActive]}
+                    >
+                      {item}
+                    </Text>
+                    {active ? <Text style={s.provinceModalCheck}>✓</Text> : null}
+                  </TouchableOpacity>
+                );
+              }}
+              ListEmptyComponent={
+                <Text style={s.provinceModalEmpty}>Không tìm thấy tỉnh/thành phù hợp</Text>
+              }
+            />
+            <TouchableOpacity
+              style={s.provinceModalClose}
+              onPress={() => setShowProvinceModal(false)}
+            >
+              <Text style={s.provinceModalCloseText}>Đóng</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -941,6 +1472,9 @@ function TherapistSetupScreen({
 }) {
   const [galleryUris, setGalleryUris] = useState<string[]>(user.serviceImages || []);
   const [displayName, setDisplayName] = useState(user.displayName || '');
+  const [shortDescription, setShortDescription] = useState(
+    normalizeVietnameseText(user.bio || '', 240),
+  );
   const [gender, setGender] = useState<'male' | 'female' | 'other'>(user.gender || 'female');
   const [workingCity, setWorkingCity] = useState(user.workingCity || 'Hà Nội');
   const [services, setServices] = useState<string[]>(
@@ -952,9 +1486,13 @@ function TherapistSetupScreen({
   const [showCityPicker, setShowCityPicker] = useState(false);
   const [cityQuery, setCityQuery] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  const [notice, setNotice] = useState<NoticeModalState>(DEFAULT_NOTICE_STATE);
   const filteredCities = VN_PROVINCES.filter((item) =>
     item.toLowerCase().includes(cityQuery.trim().toLowerCase()),
   );
+  const showNotice = (next: Omit<NoticeModalState, 'visible'>) => {
+    setNotice({ ...next, visible: true });
+  };
 
   const pickGalleryImage = async () => {
     if (galleryUris.length >= 6) {
@@ -994,49 +1532,66 @@ function TherapistSetupScreen({
 
   const handleSave = async () => {
     if (galleryUris.length < 2) {
-      Alert.alert('Thiếu hình ảnh', 'Vui lòng thêm ít nhất 2 ảnh.');
+      showNotice({ title: 'Thiếu hình ảnh', message: 'Vui lòng thêm ít nhất 2 ảnh.', variant: 'danger' });
       return;
     }
     if (!displayName.trim()) {
-      Alert.alert('Thiếu thông tin', 'Vui lòng nhập tên của bạn.');
+      showNotice({ title: 'Thiếu thông tin', message: 'Vui lòng nhập tên của bạn.', variant: 'danger' });
       return;
     }
     if (!workingCity.trim()) {
-      Alert.alert('Thiếu thông tin', 'Vui lòng chọn tỉnh/thành phố.');
+      showNotice({ title: 'Thiếu thông tin', message: 'Vui lòng chọn tỉnh/thành phố.', variant: 'danger' });
       return;
     }
     if (services.length === 0) {
-      Alert.alert('Thiếu thông tin', 'Vui lòng chọn ít nhất 1 dịch vụ.');
+      showNotice({ title: 'Thiếu thông tin', message: 'Vui lòng chọn ít nhất 1 dịch vụ.', variant: 'danger' });
       return;
     }
 
     setIsSaving(true);
     try {
+      const uploadedGalleryUris = await ensurePublicPartnerImageUris(user.authUid ?? '', galleryUris);
+      const normalizedDescription = normalizeVietnameseText(shortDescription.trim(), 240);
       const applicationId = await createPartnerApplication({
+        userId: user.authUid,
         applicationType: 'individual',
         phoneNumber: user.phoneNumber ?? '',
         displayName: displayName.trim(),
+        shortDescription: normalizedDescription,
         gender,
         workingCity,
         services,
-        imageUris: galleryUris,
+        imageUris: uploadedGalleryUris,
       });
 
       await onSave({
         ...user,
         avatarUri: user.avatarUri || '',
         displayName: displayName.trim(),
+        bio: normalizedDescription,
         gender,
         workingCity,
-        serviceImages: galleryUris,
+        serviceImages: uploadedGalleryUris,
         services,
-        role: user.role === 'therapist' ? 'therapist' : 'customer',
+        role: user.role === 'therapist' ? 'therapist' : user.role === 'admin' ? 'admin' : 'customer',
         partnerApplicationId: applicationId,
         partnerApplicationStatus: 'pending',
       });
-      Alert.alert('Đã gửi chờ duyệt', 'Hồ sơ đối tác và hình ảnh đã được gửi lên quản trị để phê duyệt.');
-    } catch {
-      Alert.alert('Gửi hồ sơ thất bại', 'Không thể gửi hồ sơ. Vui lòng thử lại.');
+      showNotice({
+        title: '✅ Gửi hồ sơ thành công',
+        message: 'Hồ sơ đối tác và hình ảnh đã được gửi đến quản trị viên để phê duyệt.',
+        variant: 'success',
+      });
+    } catch (error) {
+      const message = getErrorMessage(error, 'Không thể gửi hồ sơ. Vui lòng thử lại.');
+      showNotice({
+        title: '❌ Gửi hồ sơ thất bại',
+        message:
+          message === 'missing-user-id'
+            ? 'Không tìm thấy phiên đăng nhập. Vui lòng đăng nhập lại rồi gửi hồ sơ.'
+            : message,
+        variant: 'danger',
+      });
     } finally {
       setIsSaving(false);
     }
@@ -1044,7 +1599,7 @@ function TherapistSetupScreen({
   const canSave = galleryUris.length >= 2 && !!displayName.trim() && !!workingCity.trim() && services.length > 0 && !isSaving;
 
   return (
-    <SafeAreaView style={s.partnerContainer} edges={['top']}>
+    <SafeAreaView style={s.partnerContainer} edges={['top', 'left', 'right', 'bottom']}>
       <StatusBar barStyle="dark-content" backgroundColor="#F8FAFC" />
 
       <View style={s.partnerHeader}>
@@ -1075,7 +1630,7 @@ function TherapistSetupScreen({
                   </>
                 ) : (
                   <>
-                    <Text style={s.businessImagePlaceholderIcon}>🖼️</Text>
+                    <Feather name="image" size={28} color="#C5B8BB" />
                     <Text style={s.businessImagePlaceholderText}>Thêm ảnh</Text>
                     <View style={s.businessPlusBadge}>
                       <Text style={s.businessPlusBadgeText}>+</Text>
@@ -1087,7 +1642,10 @@ function TherapistSetupScreen({
           })}
         </View>
         {galleryUris.length < 2 ? (
-          <Text style={s.businessWarning}>❗ Vui lòng thêm ít nhất 2 ảnh</Text>
+          <View style={s.businessWarningRow}>
+            <Feather name="alert-circle" size={16} color="#B45309" />
+            <Text style={s.businessWarning}>Vui lòng thêm ít nhất 2 ảnh</Text>
+          </View>
         ) : null}
         <Text style={s.setupServiceHint}>Hình ảnh sẽ được quản trị viên duyệt nội dung. Ảnh phản cảm sẽ không được phê duyệt.</Text>
 
@@ -1098,7 +1656,29 @@ function TherapistSetupScreen({
           placeholder="Nhập tên hiển thị"
           placeholderTextColor="#9E8585"
           style={s.businessInput}
+          autoCapitalize="words"
+          autoCorrect={false}
+          spellCheck={false}
         />
+
+        <Text style={s.businessLabel}>Mô tả ngắn</Text>
+        <TextInput
+          value={shortDescription}
+          onChangeText={(value) => setShortDescription(normalizeVietnameseText(value, 240))}
+          placeholder="Giới thiệu ngắn gọn về kỹ năng/điểm mạnh của bạn"
+          placeholderTextColor="#9E8585"
+          style={[s.businessInput, s.businessTextarea]}
+          autoCapitalize="sentences"
+          autoCorrect
+          spellCheck
+          multiline
+          numberOfLines={4}
+          textAlignVertical="top"
+          maxLength={240}
+        />
+        <Text style={s.setupServiceHint}>
+          Mô tả này sẽ hiển thị trên hồ sơ kỹ thuật viên ({shortDescription.trim().length}/240).
+        </Text>
 
         <Text style={s.businessLabel}>Giới tính <Text style={s.requiredStar}>*</Text></Text>
         <View style={s.setupGenderRow}>
@@ -1185,6 +1765,9 @@ function TherapistSetupScreen({
               onChangeText={setCityQuery}
               placeholder="Tìm tỉnh/thành..."
               placeholderTextColor="#9E8585"
+              autoCapitalize="none"
+              autoCorrect={false}
+              spellCheck={false}
             />
 
             <FlatList
@@ -1211,6 +1794,18 @@ function TherapistSetupScreen({
           </View>
         </View>
       </Modal>
+      <AppNoticeModal
+        visible={notice.visible}
+        title={notice.title}
+        message={notice.message}
+        primaryText={notice.variant === 'success' ? 'Về trang trước' : 'Đã hiểu'}
+        onPrimaryPress={() => {
+          const shouldGoBack = notice.variant === 'success';
+          setNotice(DEFAULT_NOTICE_STATE);
+          if (shouldGoBack) onBack();
+        }}
+        variant={notice.variant}
+      />
     </SafeAreaView>
   );
 }
@@ -1252,17 +1847,11 @@ function ChoiceChip({
   );
 }
 
-function GuestBenefit({ label }: { label: string }) {
-  return (
-    <View style={s.guestBenefitPill}>
-      <Text style={s.guestBenefitText}>{label}</Text>
-    </View>
-  );
-}
-
 function getInitials(value: string) {
-  // If the value is purely digits (phone number), show a person icon
-  if (/^\d+$/.test(value.trim())) return '👤';
+  if (/^\d+$/.test(value.trim())) {
+    const d = value.trim().slice(-2);
+    return d || '··';
+  }
 
   return value
     .trim()
@@ -1319,7 +1908,6 @@ const s = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  partnerOptionIcon: { fontSize: 26 },
   businessHeaderTitle: { fontSize: 22, fontWeight: '800', color: '#0A2540' },
   businessContent: { paddingHorizontal: 16, paddingBottom: 36 },
   businessLabel: { marginTop: 10, marginBottom: 8, color: '#0A2540', fontSize: 18, fontWeight: '700' },
@@ -1338,7 +1926,6 @@ const s = StyleSheet.create({
     position: 'relative',
   },
   businessImage: { width: '100%', height: '100%' },
-  businessImagePlaceholderIcon: { fontSize: 24, opacity: 0.35 },
   businessImagePlaceholderText: { marginTop: 4, fontSize: 12, color: '#9E8585', fontWeight: '600' },
   businessPlusBadge: {
     position: 'absolute',
@@ -1364,7 +1951,13 @@ const s = StyleSheet.create({
     justifyContent: 'center',
   },
   businessRemoveText: { color: '#4B5563', fontSize: 15, fontWeight: '800' },
-  businessWarning: { color: '#1976D2', fontSize: 13, marginTop: 10, fontWeight: '600' },
+  businessWarningRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 10,
+  },
+  businessWarning: { color: '#B45309', fontSize: 13, fontWeight: '600', flex: 1 },
   businessInput: {
     backgroundColor: '#FFF',
     borderWidth: 1,
@@ -1374,6 +1967,9 @@ const s = StyleSheet.create({
     paddingVertical: 13,
     fontSize: 16,
     color: '#0A2540',
+  },
+  businessTextarea: {
+    minHeight: 96,
   },
   businessSelect: {
     backgroundColor: '#FFF',
@@ -1491,7 +2087,7 @@ const s = StyleSheet.create({
     paddingVertical: 14,
     marginBottom: 20,
   },
-  businessSaveBtnDisabled: { backgroundColor: '#F3E7EB' },
+  businessSaveBtnDisabled: { backgroundColor: AppColors.primarySoft },
   businessSaveBtnText: { color: '#FFF', fontSize: 17, fontWeight: '800' },
   businessSaveBtnTextDisabled: { color: '#C2AAB4' },
   container: { flex: 1, backgroundColor: COLORS.bg },
@@ -1578,13 +2174,23 @@ const s = StyleSheet.create({
   avatarImage: { width: '100%', height: '100%' },
   avatarInitials: { fontSize: 22, fontWeight: '800', color: COLORS.white },
   profileInfo: { flex: 1, gap: 3 },
+  profileNameRow: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
   profileName: { fontSize: 18, fontWeight: '800', color: COLORS.text },
+  adminBadge: {
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: COLORS.red,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+  },
+  adminBadgeText: { color: '#fff', fontSize: 11, fontWeight: '800' },
   profilePhone: { fontSize: 13, color: COLORS.subText },
   profileGender: { fontSize: 12, color: COLORS.subText },
 
   // VIP
   vipBanner: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.goldLight, marginHorizontal: 12, marginTop: 12, borderRadius: 12, paddingHorizontal: 16, paddingVertical: 12, gap: 10 },
-  vipIcon: { fontSize: 20 },
   vipText: { flex: 1, fontSize: 14, fontWeight: '600', color: '#7A5400' },
   vipBadge: { backgroundColor: COLORS.gold, paddingHorizontal: 12, paddingVertical: 4, borderRadius: 10 },
   vipBadgeText: { color: COLORS.white, fontWeight: '800', fontSize: 13 },
@@ -1594,8 +2200,17 @@ const s = StyleSheet.create({
   promoRowTablet: { height: 164 },
   promoCard: { flex: 1, borderRadius: 14, padding: 14, gap: 8, justifyContent: 'space-between' },
   promoEmoji: { fontSize: 24 },
-  promoRewardCard: { flex: 1, borderRadius: 14, overflow: 'hidden', minWidth: 0, flexBasis: 0, backgroundColor: '#FFFFFF' },
-  promoRewardBannerImg: { width: '100%', height: '100%', borderRadius: 14 },
+  promoRewardCard: {
+    flex: 1,
+    borderRadius: 14,
+    overflow: 'hidden',
+    minWidth: 0,
+    flexBasis: 0,
+    backgroundColor: '#FFFFFF',
+    position: 'relative',
+  },
+  /** Cover full card; parent clips radius (avoid contain → side letterboxing). */
+  promoRewardBannerImg: StyleSheet.absoluteFillObject,
   promoTitle: { fontSize: 13, fontWeight: '700', color: COLORS.text, lineHeight: 19 },
   promoArrow: { fontSize: 18, color: COLORS.primary, fontWeight: '700' },
 
@@ -1605,7 +2220,6 @@ const s = StyleSheet.create({
   menuRowBorder: { borderBottomWidth: 1, borderBottomColor: COLORS.border },
   menuRowLeft: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   menuIconWrap: { width: 34, height: 34, borderRadius: 17, backgroundColor: COLORS.bg, alignItems: 'center', justifyContent: 'center' },
-  menuIcon: { fontSize: 16 },
   menuLabel: { fontSize: 15, fontWeight: '500', color: COLORS.text },
   menuRowRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   menuValue: { fontSize: 14, color: COLORS.subText },
@@ -1866,7 +2480,6 @@ const s = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  cameraBadgeText: { fontSize: 16 },
   profileFormCard: {
     backgroundColor: COLORS.white,
     marginHorizontal: 16,
@@ -1897,6 +2510,71 @@ const s = StyleSheet.create({
     color: COLORS.text,
     paddingVertical: 0,
   },
+  profileSelectTouch: {
+    width: '100%',
+    minHeight: 24,
+    justifyContent: 'center',
+  },
+  profileSelectText: {
+    width: '100%',
+    textAlign: 'right',
+    fontSize: 16,
+    color: COLORS.text,
+  },
+  profileSelectPlaceholder: {
+    color: '#A0A0A0',
+  },
+  provinceModalRoot: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'flex-end',
+  },
+  provinceModalCard: {
+    backgroundColor: COLORS.white,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    maxHeight: '72%',
+    paddingBottom: 8,
+  },
+  provinceModalTitle: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: COLORS.text,
+    paddingHorizontal: 20,
+    paddingTop: 18,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
+  provinceModalSearch: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    marginBottom: 4,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    fontSize: 16,
+    color: COLORS.text,
+  },
+  provinceModalList: { maxHeight: 320 },
+  provinceModalRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: COLORS.border,
+  },
+  provinceModalRowActive: { backgroundColor: COLORS.goldLight },
+  provinceModalRowText: { flex: 1, fontSize: 16, color: COLORS.text, paddingRight: 8 },
+  provinceModalRowTextActive: { fontWeight: '700', color: COLORS.primary },
+  provinceModalCheck: { fontSize: 16, color: COLORS.primary, fontWeight: '800' },
+  provinceModalEmpty: { textAlign: 'center', color: '#A0A0A0', padding: 20 },
+  provinceModalClose: { alignItems: 'center', paddingVertical: 14 },
+  provinceModalCloseText: { fontSize: 16, color: COLORS.primary, fontWeight: '700' },
   genderChipsRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -1940,16 +2618,63 @@ const s = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
   },
-  deleteAccountButton: {
-    marginHorizontal: 16,
-    marginTop: 16,
-    paddingVertical: 12,
-    alignItems: 'flex-start',
+  deleteModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
   },
-  deleteAccountButtonText: {
-    color: COLORS.red,
+  deleteModalCard: {
+    backgroundColor: COLORS.white,
+    borderRadius: 16,
+    padding: 20,
+  },
+  deleteModalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: COLORS.text,
+    marginBottom: 8,
+  },
+  deleteModalHint: {
+    fontSize: 14,
+    color: COLORS.subText,
+    marginBottom: 14,
+    lineHeight: 20,
+  },
+  deleteModalInput: {
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
     fontSize: 16,
-    fontWeight: '500',
+    color: COLORS.text,
+    marginBottom: 18,
+  },
+  deleteModalActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 12,
+  },
+  deleteModalCancelBtn: {
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+  },
+  deleteModalCancelText: {
+    fontSize: 16,
+    color: COLORS.subText,
+    fontWeight: '600',
+  },
+  deleteModalConfirmBtn: {
+    backgroundColor: COLORS.red,
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+    borderRadius: 12,
+  },
+  deleteModalConfirmText: {
+    fontSize: 16,
+    color: COLORS.white,
+    fontWeight: '700',
   },
 
   // Guest
@@ -1965,21 +2690,21 @@ const s = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#F1E1E4',
   },
-  guestGlowPrimary: {
+  guestZenaPrimary: {
     position: 'absolute',
     width: 180,
     height: 180,
     borderRadius: 90,
-    backgroundColor: '#F8E0E5',
+    backgroundColor: AppColors.primarySoft,
     top: -78,
     right: -46,
   },
-  guestGlowSecondary: {
+  guestZenaSecondary: {
     position: 'absolute',
     width: 120,
     height: 120,
     borderRadius: 60,
-    backgroundColor: '#FAEEF1',
+    backgroundColor: AppColors.primarySoft2,
     left: -30,
     bottom: -36,
   },
@@ -2018,9 +2743,9 @@ const s = StyleSheet.create({
     gap: 8,
   },
   guestBenefitPill: {
-    backgroundColor: '#FAF4F5',
+    backgroundColor: AppColors.primarySoft2,
     borderWidth: 1,
-    borderColor: '#EED7DC',
+    borderColor: AppColors.border,
     borderRadius: 999,
     paddingHorizontal: 12,
     paddingVertical: 8,
@@ -2032,7 +2757,15 @@ const s = StyleSheet.create({
   },
   signInBtn: { backgroundColor: COLORS.primary, borderRadius: 16, paddingVertical: 15, alignSelf: 'stretch', alignItems: 'center', marginTop: 4, shadowColor: COLORS.primary, shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.14, shadowRadius: 20, elevation: 4 },
   signInBtnText: { color: COLORS.white, fontSize: 15, fontWeight: '700' },
-  signUpBtn: { borderWidth: 1.5, borderColor: '#D8A9B2', borderRadius: 16, paddingVertical: 14, alignSelf: 'stretch', alignItems: 'center', backgroundColor: '#FFF8F9' },
+  signUpBtn: {
+    borderWidth: 1.5,
+    borderColor: AppColors.primary,
+    borderRadius: 16,
+    paddingVertical: 14,
+    alignSelf: 'stretch',
+    alignItems: 'center',
+    backgroundColor: AppColors.primarySoft2,
+  },
   signUpBtnText: { color: COLORS.primary, fontSize: 15, fontWeight: '700' },
   guestSectionHeader: {
     marginHorizontal: 16,
@@ -2052,10 +2785,10 @@ const s = StyleSheet.create({
   guestHighlightCard: {
     marginHorizontal: 12,
     marginTop: 12,
-    backgroundColor: '#FFF4F6',
+    backgroundColor: AppColors.primarySoft2,
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: '#F0D5DB',
+    borderColor: AppColors.border,
     padding: 16,
     flexDirection: 'row',
     alignItems: 'center',
@@ -2082,16 +2815,33 @@ const s = StyleSheet.create({
   logoutBtn: {
     marginHorizontal: 12,
     marginTop: 16,
-    backgroundColor: '#FFF0F0',
+    backgroundColor: AppColors.primarySoft2,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#FADDDD',
+    borderColor: AppColors.border,
     paddingVertical: 14,
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
   },
   logoutBtnText: {
     color: COLORS.red,
     fontSize: 15,
     fontWeight: '700',
+  },
+  accountDeleteBtn: {
+    marginHorizontal: 12,
+    marginTop: 10,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  accountDeleteBtnText: {
+    color: COLORS.red,
+    fontSize: 15,
+    fontWeight: '600',
   },
 });

@@ -1,11 +1,9 @@
 import { AppColors } from '@/constants/appColors';
+import { LinearGradient } from 'expo-linear-gradient';
 import React from 'react';
-import {
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
-} from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
+import Animated, { FadeInDown, FadeIn } from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export type OnboardingLanguage = 'en' | 'vi';
 
@@ -13,104 +11,132 @@ export type OnboardingProps = {
   onComplete: (language: OnboardingLanguage) => void;
 };
 
-const strings: Record<OnboardingLanguage, { title: string; subtitle: string; languageTitle: string; languageDesc: string }> = {
-  vi: {
-    title: 'Chào mừng đến với Glow',
-    subtitle: 'Đăng ký để trải nghiệm dịch vụ tốt nhất',
-    languageTitle: 'Chọn ngôn ngữ',
-    languageDesc: 'Bạn muốn dùng Glow bằng ngôn ngữ nào?',
-  },
-  en: {
-    title: 'Welcome to Glow',
-    subtitle: 'Register to enjoy the best service',
-    languageTitle: 'Choose your language',
-    languageDesc: 'Which language would you like to use?',
-  },
-};
-
 export function Onboarding({ onComplete }: OnboardingProps) {
-  const currentStrings = strings.vi;
+  const insets = useSafeAreaInsets();
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>{currentStrings.title}</Text>
-      <Text style={styles.subtitle}>{currentStrings.subtitle}</Text>
+    <LinearGradient
+      colors={[AppColors.accentSoft, AppColors.primarySoft2, AppColors.bg]}
+      locations={[0, 0.38, 1]}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 1, y: 1 }}
+      style={styles.root}
+    >
+      <View style={[styles.inner, { paddingTop: insets.top + 20, paddingBottom: insets.bottom + 28 }]}>
+        <Animated.View entering={FadeIn.duration(480)} style={styles.header}>
+          <Text style={styles.title}>Chọn ngôn ngữ</Text>
+        </Animated.View>
 
-      <View style={styles.stepCard}>
-        <Text style={styles.stepTitle}>{currentStrings.languageTitle}</Text>
-        <Text style={styles.stepDescription}>{currentStrings.languageDesc}</Text>
+        <View style={styles.cards}>
+          <Animated.View entering={FadeInDown.duration(440).delay(70)}>
+            <Pressable
+              onPress={() => onComplete('vi')}
+              style={({ pressed }) => [styles.cardOuter, pressed && styles.cardPressed]}
+              android_ripple={{ color: 'rgba(124, 106, 91, 0.12)' }}
+            >
+              <LinearGradient
+                colors={['#FFFCF8', AppColors.white, AppColors.primarySoft2]}
+                locations={[0, 0.45, 1]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.cardGradient}
+              >
+                <View style={styles.cardRow}>
+                  <Text style={styles.flag} allowFontScaling={false}>
+                    🇻🇳
+                  </Text>
+                  <Text style={styles.cardLabel}>Tiếng Việt</Text>
+                </View>
+              </LinearGradient>
+            </Pressable>
+          </Animated.View>
 
-        <View style={styles.languageRow}>
-          <TouchableOpacity
-            style={styles.languageButton}
-            onPress={() => onComplete('vi')}>
-            <Text style={styles.languageButtonText}>Tiếng Việt</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.languageButton}
-            onPress={() => onComplete('en')}>
-            <Text style={styles.languageButtonText}>English</Text>
-          </TouchableOpacity>
+          <Animated.View entering={FadeInDown.duration(440).delay(150)}>
+            <Pressable
+              onPress={() => onComplete('en')}
+              style={({ pressed }) => [styles.cardOuter, pressed && styles.cardPressed]}
+              android_ripple={{ color: 'rgba(124, 106, 91, 0.12)' }}
+            >
+              <LinearGradient
+                colors={['#FFFCF8', AppColors.white, '#EEF3F8']}
+                locations={[0, 0.5, 1]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.cardGradient}
+              >
+                <View style={styles.cardRow}>
+                  <Text style={styles.flag} allowFontScaling={false}>
+                    🇬🇧
+                  </Text>
+                  <Text style={styles.cardLabel}>English</Text>
+                </View>
+              </LinearGradient>
+            </Pressable>
+          </Animated.View>
         </View>
       </View>
-    </View>
+    </LinearGradient>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  root: {
     flex: 1,
-    padding: 22,
+  },
+  inner: {
+    flex: 1,
+    paddingHorizontal: 26,
     justifyContent: 'center',
-    backgroundColor: AppColors.bg,
+  },
+  header: {
+    alignItems: 'center',
+    marginBottom: 32,
   },
   title: {
-    fontSize: 28,
-    fontWeight: '800',
+    fontSize: 24,
+    fontWeight: '700',
     color: AppColors.text,
-    marginBottom: 10,
+    letterSpacing: -0.3,
+    textShadowColor: 'rgba(255, 255, 255, 0.75)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 6,
   },
-  subtitle: {
-    fontSize: 15,
-    color: AppColors.textMuted,
-    marginBottom: 30,
+  cards: {
+    gap: 16,
   },
-  stepCard: {
-    backgroundColor: AppColors.white,
-    borderRadius: 20,
-    padding: 20,
-    borderWidth: 1,
-    borderColor: AppColors.border,
+  cardOuter: {
+    borderRadius: 22,
+    overflow: 'hidden',
+    borderWidth: 1.5,
+    borderColor: 'rgba(156, 107, 63, 0.22)',
+    shadowColor: '#2F241C',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.12,
+    shadowRadius: 20,
+    elevation: 8,
   },
-  stepTitle: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: AppColors.text,
-    marginBottom: 8,
+  cardPressed: {
+    transform: [{ scale: 0.985 }],
+    opacity: 0.96,
   },
-  stepDescription: {
-    fontSize: 14,
-    color: AppColors.textMuted,
-    marginBottom: 20,
-    lineHeight: 20,
+  cardGradient: {
+    paddingVertical: 20,
+    paddingHorizontal: 22,
   },
-  languageRow: {
+  cardRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: 12,
-  },
-  languageButton: {
-    flex: 1,
-    backgroundColor: AppColors.primarySoft,
-    borderWidth: 1,
-    borderColor: AppColors.border,
-    borderRadius: 14,
-    paddingVertical: 14,
     alignItems: 'center',
+    justifyContent: 'center',
+    gap: 16,
   },
-  languageButtonText: {
-    fontSize: 15,
+  flag: {
+    fontSize: 36,
+    lineHeight: 42,
+  },
+  cardLabel: {
+    fontSize: 19,
     fontWeight: '700',
     color: AppColors.primaryDark,
+    letterSpacing: -0.2,
   },
 });

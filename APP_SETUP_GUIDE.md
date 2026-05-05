@@ -1,4 +1,4 @@
-# 🛠️ COMPLETE APP SETUP GUIDE - Massage Booking App (GLOW-style)
+# 🛠️ COMPLETE APP SETUP GUIDE - Massage Booking App (Zena)
 
 ## 📋 PROJECT STRUCTURE
 
@@ -181,7 +181,7 @@ Main App (3 tabs):
 
 ## 🎨 UI/UX NOTES
 
-App structure follows GLOW app pattern:
+App structure follows the Zena app pattern:
 - **Home Tab**: Browse services, quick book
 - **Explore Tab**: Browse therapists, special offers
 - **Account Tab**: Profile, booking history, settings
@@ -197,7 +197,7 @@ Design system already set:
 
 1. Run emulator: `npm start`
 2. Test language selection
-3. Test sign up with OTP (test mode)
+3. Test sign up with OTP (Supabase Auth / your configured provider)
 4. Verify user saved in AsyncStorage
 5. Test Supabase fetch after adding data
 6. Test navigation between screens

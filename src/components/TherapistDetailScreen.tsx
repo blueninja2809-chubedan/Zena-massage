@@ -1,11 +1,19 @@
 import { useBookings } from '@/contexts/BookingsContext';
+import {
+  getGeneratedReviewItemCount,
+  isVirtualTherapistId,
+  VIRTUAL_REVIEW_TEMPLATES,
+} from '@/lib/virtualTherapistsMock';
+import { getTherapistDisplayTag, THERAPIST_TAG_VISUAL } from '@/constants/therapistTags';
+import { isRenderableTherapistImageUri } from '@/lib/supabaseService';
 import type { Therapist } from '@/lib/types';
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Dimensions,
   FlatList,
   Image,
   Modal,
+  Platform,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
   ScrollView,
@@ -15,7 +23,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppColors } from '@/constants/appColors';
 import BookingConfirmScreen from './BookingConfirmScreen';
 
@@ -25,13 +33,23 @@ function getTherapistPhotos(therapist: Therapist): string[] {
   if (therapist.photos && therapist.photos.length > 0) {
     return therapist.photos;
   }
-  if (therapist.avatar && therapist.avatar.startsWith('http')) {
+  if (therapist.avatar && isRenderableTherapistImageUri(therapist.avatar)) {
     return [therapist.avatar];
   }
   return [];
 }
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
+
+function formatDistanceLabel(distanceKm: number): string {
+  if (!Number.isFinite(distanceKm) || distanceKm <= 0) {
+    return 'Đang cập nhật';
+  }
+  if (distanceKm < 1) {
+    return `${Math.max(1, Math.round(distanceKm * 1000))}m`;
+  }
+  return `${Math.round(distanceKm * 10) / 10} km`;
+}
 
 const COLORS = {
   green: AppColors.primaryDark,
@@ -64,8 +82,39 @@ interface ReviewItem {
   hasTranslate: boolean;
 }
 
+function normalizeServiceName(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+}
+
+function isMassageServiceName(value: string): boolean {
+  const normalized = normalizeServiceName(value);
+  return normalized.includes('massage') || normalized.includes('mat xa') || normalized.includes('xoa bop');
+}
+
 function generateServicesForTherapist(therapist: Therapist): ServiceItem[] {
-  return therapist.specialties.map((specialty) => ({
+  const specs = therapist.specialties ?? [];
+  if (specs.length === 0) {
+    return [
+      {
+        name: 'Massage',
+        durations: [60, 90, 120],
+        price: therapist.hourlyRate > 0 ? therapist.hourlyRate * 2 : 600000,
+      },
+    ];
+  }
+  const sortedSpecs = [...specs].sort((a, b) => {
+    const aPriority = isMassageServiceName(a) ? 0 : 1;
+    const bPriority = isMassageServiceName(b) ? 0 : 1;
+    if (aPriority !== bPriority) {
+      return aPriority - bPriority;
+    }
+    return a.localeCompare(b, 'vi');
+  });
+  return sortedSpecs.map((specialty) => ({
     name: specialty,
     durations: specialty === 'Lấy ráy tai' ? [40] : [60, 90, 120],
     price: therapist.hourlyRate > 0 ? therapist.hourlyRate * 2 : 600000,
@@ -73,7 +122,7 @@ function generateServicesForTherapist(therapist: Therapist): ServiceItem[] {
 }
 
 function generateReviews(therapist: Therapist): ReviewItem[] {
-  const reviewTemplates = [
+  const defaultTemplates = [
     { comment: 'Excellent Massage.', hasTranslate: true },
     { comment: 'Chưa có nội dung', hasTranslate: false },
     { comment: 'Lành mạnh, làm tốt đủ giờ', hasTranslate: true },
@@ -81,7 +130,10 @@ function generateReviews(therapist: Therapist): ReviewItem[] {
     { comment: 'Rất chuyên nghiệp, sẽ quay lại', hasTranslate: true },
   ];
 
-  const count = Math.min(therapist.reviewCount, 5);
+  const reviewTemplates = isVirtualTherapistId(therapist.id)
+    ? VIRTUAL_REVIEW_TEMPLATES
+    : defaultTemplates;
+  const count = getGeneratedReviewItemCount(therapist);
   return Array.from({ length: count }, (_, i) => {
     const tpl = reviewTemplates[i % reviewTemplates.length];
     const day = 12 - i * 3;
@@ -114,10 +166,14 @@ function StarDisplay({ rating, size = 14 }: { rating: number; size?: number }) {
 export default function TherapistDetailScreen({
   therapist,
   onClose,
+  resumeOpenBookingToken = '',
 }: {
   therapist: Therapist;
   onClose: () => void;
+  /** Mỗi lần đổi (vd. từ banner đơn chờ) → tự mở màn đặt lịch. */
+  resumeOpenBookingToken?: string;
 }) {
+  const insets = useSafeAreaInsets();
   const { getReviewsForTherapist } = useBookings();
   const services = generateServicesForTherapist(therapist);
   const generatedReviews = generateReviews(therapist);
@@ -142,6 +198,21 @@ export default function TherapistDetailScreen({
   const [selectedDurations, setSelectedDurations] = useState<Record<string, number>>({});
   const [selectedServices, setSelectedServices] = useState<Set<string>>(new Set());
   const [showBooking, setShowBooking] = useState(false);
+  const lastResumeTokenRef = useRef('');
+  useEffect(() => {
+    lastResumeTokenRef.current = '';
+  }, [therapist.id]);
+
+  useEffect(() => {
+    if (!resumeOpenBookingToken) {
+      return;
+    }
+    if (resumeOpenBookingToken === lastResumeTokenRef.current) {
+      return;
+    }
+    lastResumeTokenRef.current = resumeOpenBookingToken;
+    setShowBooking(true);
+  }, [resumeOpenBookingToken]);
   const [photoIndex, setPhotoIndex] = useState(0);
   const [showPhotoViewer, setShowPhotoViewer] = useState(false);
   const photos = getTherapistPhotos(therapist);
@@ -180,10 +251,7 @@ export default function TherapistDetailScreen({
     .filter((svc) => selectedServices.has(svc.name))
     .reduce((sum, svc) => sum + svc.price, 0);
 
-  const distanceText =
-    therapist.distanceFromCenter < 1
-      ? `${Math.round(therapist.distanceFromCenter * 1000)}m`
-      : `${therapist.distanceFromCenter} km`;
+  const distanceText = formatDistanceLabel(therapist.distanceFromCenter);
 
   // Rating breakdown (include real reviews)
   const totalReviewCount = therapist.reviewCount + realReviews.length;
@@ -210,13 +278,11 @@ export default function TherapistDetailScreen({
     { stars: 1, count: realOne, pct: Math.round((realOne / total) * 100) },
   ];
 
-  const getTag = (): string | null => {
-    if (therapist.rating >= 4.8) return 'Chất lượng';
-    if (therapist.experience <= 1) return 'Mới đến';
-    return null;
-  };
-
-  const tag = getTag();
+  const tag = getTherapistDisplayTag(therapist);
+  const tagVisual = tag ? THERAPIST_TAG_VISUAL[tag] : null;
+  const modalTopFallback = Platform.OS === 'ios' ? 44 : 12;
+  const heroTopOffset = insets.top > 0 ? 10 : modalTopFallback;
+  const photoViewerCloseTop = (insets.top > 0 ? insets.top : modalTopFallback) + 6;
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -261,7 +327,7 @@ export default function TherapistDetailScreen({
           )}
 
           {/* Overlay top buttons */}
-          <View style={styles.heroTopBar}>
+          <View style={[styles.heroTopBar, { top: heroTopOffset }]}>
             <TouchableOpacity style={styles.heroCircleBtn} onPress={onClose}>
               <Text style={styles.heroBtnText}>‹</Text>
             </TouchableOpacity>
@@ -277,9 +343,18 @@ export default function TherapistDetailScreen({
 
           {/* Bottom badges */}
           <View style={styles.heroBottomBar}>
-            {tag && (
-              <View style={styles.qualityBadge}>
-                <Text style={styles.qualityBadgeText}>{tag}</Text>
+            {tag && tagVisual && (
+              <View
+                style={[
+                  styles.heroTagPill,
+                  {
+                    backgroundColor: tagVisual.bg,
+                    borderColor: tagVisual.border,
+                    shadowColor: tagVisual.bg,
+                  },
+                ]}
+              >
+                <Text style={[styles.heroTagPillText, { color: tagVisual.text }]}>{tag}</Text>
               </View>
             )}
             <View style={{ flex: 1 }} />
@@ -306,24 +381,24 @@ export default function TherapistDetailScreen({
           </View>
         </View>
 
-        {/* ===== GlowCare Box ===== */}
-        <View style={styles.glowCareBox}>
-          <View style={styles.glowCareLeft}>
-            <View style={styles.glowCareIcon}>
-              <Text style={styles.glowCareCheckBig}>✅</Text>
+        {/* ===== Zena Care promo ===== */}
+        <View style={styles.zenaCareBox}>
+          <View style={styles.zenaCareLeft}>
+            <View style={styles.zenaCareIcon}>
+              <Text style={styles.zenaCareCheckBig}>✅</Text>
             </View>
-            <Text style={styles.glowCareBrand}>
-              glow<Text style={styles.glowCareBoldText}>Care</Text>
+            <Text style={styles.zenaCareBrand}>
+              zena<Text style={styles.zenaCareBoldText}>Care</Text>
             </Text>
           </View>
-          <View style={styles.glowCareRight}>
-            <View style={styles.glowCareRow}>
-              <Text style={styles.glowCareCheck}>☑️</Text>
-              <Text style={styles.glowCareText}>Không mất tiền tip, không phí di chuyển</Text>
+          <View style={styles.zenaCareRight}>
+            <View style={styles.zenaCareRow}>
+              <Text style={styles.zenaCareCheck}>☑️</Text>
+              <Text style={styles.zenaCareText}>Không mất tiền tip, không phí di chuyển</Text>
             </View>
-            <View style={styles.glowCareRow}>
-              <Text style={styles.glowCareCheck}>☑️</Text>
-              <Text style={styles.glowCareText}>Bồi thường nếu không đúng người</Text>
+            <View style={styles.zenaCareRow}>
+              <Text style={styles.zenaCareCheck}>☑️</Text>
+              <Text style={styles.zenaCareText}>Bồi thường nếu không đúng người</Text>
             </View>
           </View>
         </View>
@@ -488,7 +563,7 @@ export default function TherapistDetailScreen({
         <View style={styles.photoViewerBg}>
           <StatusBar barStyle="light-content" />
           <TouchableOpacity
-            style={styles.photoViewerCloseBtn}
+            style={[styles.photoViewerCloseBtn, { top: photoViewerCloseTop }]}
             onPress={() => setShowPhotoViewer(false)}
           >
             <Text style={styles.photoViewerCloseIcon}>✕</Text>
@@ -538,19 +613,27 @@ export default function TherapistDetailScreen({
       </Modal>
 
       {/* Booking Confirm Modal */}
-      <Modal visible={showBooking} animationType="slide">
-        <BookingConfirmScreen
-          therapist={therapist}
-          selectedServices={services
-            .filter((svc) => selectedServices.has(svc.name))
-            .map((svc) => ({
-              name: svc.name,
-              duration: selectedDurations[svc.name] ?? svc.durations[0],
-              price: svc.price,
-            }))}
-          totalPrice={totalPrice}
-          onClose={() => setShowBooking(false)}
-        />
+      <Modal
+        visible={showBooking}
+        animationType="slide"
+        presentationStyle="fullScreen"
+        hardwareAccelerated
+        onRequestClose={() => setShowBooking(false)}
+      >
+        <View style={{ flex: 1, backgroundColor: AppColors.bg }}>
+          <BookingConfirmScreen
+            therapist={therapist}
+            selectedServices={services
+              .filter((svc) => selectedServices.has(svc.name))
+              .map((svc) => ({
+                name: svc.name,
+                duration: selectedDurations[svc.name] ?? svc.durations[0],
+                price: svc.price,
+              }))}
+            totalPrice={totalPrice}
+            onClose={() => setShowBooking(false)}
+          />
+        </View>
       </Modal>
     </SafeAreaView>
   );
@@ -668,16 +751,23 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-end',
   },
-  qualityBadge: {
-    backgroundColor: COLORS.green,
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    borderRadius: 6,
+  heroTagPill: {
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 999,
+    borderWidth: 1,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    elevation: 8,
   },
-  qualityBadgeText: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: '700',
+  heroTagPillText: {
+    fontSize: 13,
+    fontWeight: '800',
+    letterSpacing: 0.4,
+    textShadowColor: 'rgba(0,0,0,0.2)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
   },
   photoCounter: {
     backgroundColor: 'rgba(0,0,0,0.5)',
@@ -737,8 +827,8 @@ const styles = StyleSheet.create({
     textDecorationLine: 'underline',
   },
 
-  // GlowCare
-  glowCareBox: {
+  // Zena Care promo block styles
+  zenaCareBox: {
     marginHorizontal: 20,
     borderWidth: 1.5,
     borderColor: COLORS.greenBorder,
@@ -748,37 +838,37 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 16,
   },
-  glowCareLeft: {
+  zenaCareLeft: {
     alignItems: 'center',
     marginRight: 14,
   },
-  glowCareIcon: {
+  zenaCareIcon: {
     marginBottom: 4,
   },
-  glowCareCheckBig: {
+  zenaCareCheckBig: {
     fontSize: 28,
   },
-  glowCareBrand: {
+  zenaCareBrand: {
     fontSize: 12,
     color: COLORS.subText,
   },
-  glowCareBoldText: {
+  zenaCareBoldText: {
     fontWeight: '800',
     color: COLORS.text,
   },
-  glowCareRight: {
+  zenaCareRight: {
     flex: 1,
   },
-  glowCareRow: {
+  zenaCareRow: {
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 4,
   },
-  glowCareCheck: {
+  zenaCareCheck: {
     fontSize: 14,
     marginRight: 6,
   },
-  glowCareText: {
+  zenaCareText: {
     fontSize: 13,
     color: COLORS.text,
     flex: 1,

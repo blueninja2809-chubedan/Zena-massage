@@ -13,6 +13,11 @@
     },
     "preview": {
       "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_SMS_OTP_SIGNUP": "true",
+        "EXPO_PUBLIC_SMS_API_BASE_URL": "https://darkslategrey-weasel-236739.hostingersite.com",
+        "EXPO_PUBLIC_SMS_API_TIMEOUT_MS": "30000"
+      },
       "android": {
         "buildType": "apk"
       },
@@ -21,14 +26,37 @@
       }
     },
     "production": {
+      "channel": "production",
+      "environment": "production",
       "distribution": "store",
-      "autoIncrement": true
+      "autoIncrement": true,
+      "env": {
+        "NODE_OPTIONS": "--max-old-space-size=6144",
+        "EXPO_PUBLIC_SMS_OTP_SIGNUP": "true",
+        "EXPO_PUBLIC_SMS_API_BASE_URL": "https://darkslategrey-weasel-236739.hostingersite.com",
+        "EXPO_PUBLIC_SMS_API_TIMEOUT_MS": "30000"
+      },
+      "android": {
+        "resourceClass": "large"
+      }
+    },
+    "production_review": {
+      "channel": "production",
+      "environment": "production",
+      "distribution": "store",
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_APP_REVIEW_MODE": "true",
+        "EXPO_PUBLIC_SMS_OTP_SIGNUP": "true",
+        "EXPO_PUBLIC_SMS_API_BASE_URL": "https://darkslategrey-weasel-236739.hostingersite.com",
+        "EXPO_PUBLIC_SMS_API_TIMEOUT_MS": "30000"
+      }
     }
   },
   "submit": {
     "production": {
       "android": {
-        "serviceAccountKeyPath": "./google-services.json",
+        "serviceAccountKeyPath": "./credentials/play-store-service-account.json",
         "track": "production"
       },
       "ios": {

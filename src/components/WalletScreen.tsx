@@ -18,11 +18,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import type { OnboardingLanguage } from '@/components/Onboarding';
 import TherapistTopUpScreen from '@/components/TherapistTopUpScreen';
+import { AppColors } from '@/constants/appColors';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useUser } from '@/contexts/UserContext';
 import type { WalletTransaction } from '@/lib/supabaseService';
 import { createWithdrawalRequest, getOrCreateWallet, getWalletTransactions } from '@/lib/supabaseService';
-import { AppColors } from '@/constants/appColors';
 
 // —— Translations ——
 const TR: Record<OnboardingLanguage, Record<string, string>> = {
@@ -516,15 +516,15 @@ const s = StyleSheet.create({
     letterSpacing: 1,
   },
   balanceAmount: {
-    fontSize: 34,
-    fontWeight: '800',
+    fontSize: 24,
+    fontWeight: '400',
     color: P.text,
-    letterSpacing: -0.5,
+    letterSpacing: 0,
     marginBottom: 16,
   },
   balanceCurrency: {
-    fontSize: 20,
-    fontWeight: '600',
+    fontSize: 16,
+    fontWeight: '400',
     color: P.sub,
   },
   balanceBtnsRow: {

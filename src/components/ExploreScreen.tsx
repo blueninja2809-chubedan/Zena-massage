@@ -1,7 +1,7 @@
+import { AppColors } from '@/constants/appColors';
 import { useBookings } from '@/contexts/BookingsContext';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useUser } from '@/contexts/UserContext';
-import { AppColors } from '@/constants/appColors';
 import { useTabletLayout } from '@/hooks/use-tablet-layout';
 import { getServices } from '@/lib/supabaseService';
 import type { Service } from '@/lib/types';

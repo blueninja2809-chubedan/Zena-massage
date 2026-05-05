@@ -9,7 +9,6 @@ import {
     Image,
     Modal,
     PanResponder,
-    Platform,
     ScrollView,
     StatusBar,
     StyleSheet,
@@ -20,13 +19,18 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import type { OnboardingLanguage } from '@/components/Onboarding';
+import ChatScreen from '@/components/ChatScreen';
+import { ModalSafeAreaProvider } from '@/components/ModalSafeAreaProvider';
+import NotificationScreen from '@/components/NotificationScreen';
 import TherapistTopUpScreen from '@/components/TherapistTopUpScreen';
 import WalletScreen from '@/components/WalletScreen';
+import { AppColors } from '@/constants/appColors';
 import { useBookings } from '@/contexts/BookingsContext';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { useNotifications } from '@/contexts/NotificationContext';
 import { useUser } from '@/contexts/UserContext';
-import { AppColors } from '@/constants/appColors';
-import { getOrCreateWallet, getTherapistShifts, saveTherapistShifts } from '@/lib/supabaseService';
+import { getLocalDateString, getOrCreateWallet, getTherapistShifts, saveTherapistShifts } from '@/lib/supabaseService';
+import { useRouter } from 'expo-router';
 
 const translations: Record<OnboardingLanguage, Record<string, string>> = {
   vi: {
@@ -94,12 +98,6 @@ const supportChannels = [
   { id: 'messenger', name: 'Messenger', iconType: 'fa5' as const, iconName: 'facebook-messenger', color: '#0084FF' },
   { id: 'telegram', name: 'Telegram', iconType: 'fa5' as const, iconName: 'telegram-plane', color: '#26A5E4' },
 ];
-const FONT_ELEGANT = Platform.select({
-  ios: 'System',
-  android: 'sans-serif-light',
-  default: undefined,
-});
-
 const SHIFT_SLOTS = [
   '00h - 02h', '02h - 04h',
   '04h - 06h', '06h - 08h',
@@ -110,6 +108,7 @@ const SHIFT_SLOTS = [
 ];
 
 export default function TherapistScheduleScreen() {
+  const router = useRouter();
   const { language } = useLanguage();
   const { user } = useUser();
   const { getTherapistBookings } = useBookings();
@@ -119,27 +118,9 @@ export default function TherapistScheduleScreen() {
   const [showTopUp, setShowTopUp] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [showSupportModal, setShowSupportModal] = useState(false);
-
-  // Draggable support button
-  const pan = useRef(new Animated.ValueXY()).current;
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dx) > 5 || Math.abs(g.dy) > 5,
-      onPanResponderGrant: () => {
-        pan.setOffset({ x: (pan.x as any)._value, y: (pan.y as any)._value });
-        pan.setValue({ x: 0, y: 0 });
-      },
-      onPanResponderMove: Animated.event([null, { dx: pan.x, dy: pan.y }], { useNativeDriver: false }),
-      onPanResponderRelease: () => { pan.flattenOffset(); },
-    }),
-  ).current;
-
-  const handleSelectSupport = (channel: typeof supportChannels[0]) => {
-    console.log('Selected support channel:', channel.name);
-    setShowSupportModal(false);
-  };
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [showChat, setShowChat] = useState(false);
+  const { unreadCount } = useNotifications();
 
   // Shift data per date: { 'YYYY-MM-DD': string[] }
   const [shiftsByDate, setShiftsByDate] = useState<Record<string, string[]>>({});
@@ -147,8 +128,10 @@ export default function TherapistScheduleScreen() {
   // Edit modal state: shifts for today & tomorrow being edited
   const [editSlots, setEditSlots] = useState<Record<string, string[]>>({});
 
-  const today = new Date().toISOString().slice(0, 10);
-  const tomorrowDate = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const today = getLocalDateString();
+  const tomorrowD = new Date();
+  tomorrowD.setDate(tomorrowD.getDate() + 1);
+  const tomorrowDate = getLocalDateString(tomorrowD);
 
   const displayName = user?.displayName || user?.phoneNumber || 'KTV';
   const allBookings = getTherapistBookings(displayName);
@@ -162,12 +145,12 @@ export default function TherapistScheduleScreen() {
     [allBookings, tomorrowDate],
   );
 
-  const loadWalletBalance = () => {
+  const loadWalletBalance = useCallback(() => {
     if (!user?.authUid) return;
     getOrCreateWallet(user.authUid)
       .then((w) => setWalletBalance(w.balance))
       .catch(() => {});
-  };
+  }, [user?.authUid]);
 
   const loadShifts = useCallback(() => {
     if (!user?.authUid) return;
@@ -185,7 +168,7 @@ export default function TherapistScheduleScreen() {
   useEffect(() => {
     loadWalletBalance();
     loadShifts();
-  }, [user?.authUid, loadShifts]);
+  }, [loadWalletBalance, loadShifts]);
 
   const todaySlots = shiftsByDate[today] || [];
   const tomorrowSlots = shiftsByDate[tomorrowDate] || [];
@@ -234,9 +217,13 @@ export default function TherapistScheduleScreen() {
   };
 
   return (
-    <SafeAreaView style={s.container} edges={['top']}>
+    <SafeAreaView style={s.container} edges={['top', 'left', 'right']}>
       <StatusBar barStyle="dark-content" backgroundColor={C.bg} />
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={s.contentWrap}>
+      <ScrollView
+        style={s.scroll}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={s.contentWrap}
+      >
         <View style={s.headerRow}>
           <View style={s.headerLeft}>
             {user?.avatarUri ? (
@@ -250,8 +237,17 @@ export default function TherapistScheduleScreen() {
             <Feather name="chevron-down" size={16} color={C.sub} />
           </View>
           <View style={s.headerRight}>
-            <TouchableOpacity style={s.iconBtn}><Feather name="bell" size={19} color={C.text} /></TouchableOpacity>
-            <TouchableOpacity style={s.iconBtn}><Feather name="message-circle" size={19} color={C.text} /></TouchableOpacity>
+            <TouchableOpacity style={s.iconBtn} onPress={() => setShowNotifications(true)}>
+              <Feather name="bell" size={19} color={C.text} />
+              {unreadCount > 0 ? (
+                <View style={s.unreadBadge}>
+                  <Text style={s.unreadBadgeText}>{unreadCount > 99 ? '99+' : String(unreadCount)}</Text>
+                </View>
+              ) : null}
+            </TouchableOpacity>
+            <TouchableOpacity style={s.iconBtn} onPress={() => setShowChat(true)}>
+              <Feather name="message-circle" size={19} color={C.text} />
+            </TouchableOpacity>
           </View>
         </View>
 
@@ -335,104 +331,81 @@ export default function TherapistScheduleScreen() {
 
       {/* Top-up screen */}
       <Modal visible={showTopUp} animationType="slide" onRequestClose={() => setShowTopUp(false)}>
-        <TherapistTopUpScreen onClose={() => { setShowTopUp(false); loadWalletBalance(); }} />
+        <ModalSafeAreaProvider>
+          <TherapistTopUpScreen onClose={() => { setShowTopUp(false); loadWalletBalance(); }} />
+        </ModalSafeAreaProvider>
       </Modal>
 
       {/* Wallet screen */}
       <Modal visible={showWallet} animationType="slide" onRequestClose={() => setShowWallet(false)}>
-        <WalletScreen onClose={() => { setShowWallet(false); loadWalletBalance(); }} />
+        <ModalSafeAreaProvider>
+          <WalletScreen onClose={() => { setShowWallet(false); loadWalletBalance(); }} />
+        </ModalSafeAreaProvider>
       </Modal>
 
       {/* Edit shifts modal */}
       <Modal visible={showEditModal} animationType="slide" onRequestClose={() => setShowEditModal(false)}>
-        <SafeAreaView style={s.modalContainer} edges={['top', 'bottom']}>
-          <View style={s.modalHeader}>
-            <TouchableOpacity onPress={() => setShowEditModal(false)}>
-              <Text style={s.modalCancel}>{t.cancel}</Text>
-            </TouchableOpacity>
-            <Text style={s.modalTitle}>{t.editTitle}</Text>
-            <TouchableOpacity onPress={handleSave} disabled={saving}>
-              {saving ? (
-                <ActivityIndicator size="small" color={C.accent} />
-              ) : (
-                <Text style={s.modalSave}>{t.save}</Text>
-              )}
-            </TouchableOpacity>
-          </View>
-          <ScrollView contentContainerStyle={s.modalContent}>
-            {[today, tomorrowDate].map((dateStr) => (
-              <View key={dateStr} style={s.modalDaySection}>
-                <Text style={s.modalDayLabel}>{formatDateLabel(dateStr)}  ({dateStr})</Text>
-                <View style={s.modalSlotWrap}>
-                  {SHIFT_SLOTS.map((slot) => {
-                    const active = (editSlots[dateStr] || []).includes(slot);
-                    return (
-                      <TouchableOpacity
-                        key={slot}
-                        style={[s.slotChip, active && s.slotChipActive]}
-                        onPress={() => toggleEditSlot(dateStr, slot)}
-                        activeOpacity={0.85}
-                      >
-                        <Text style={[s.slotChipText, active && s.slotChipTextActive]}>{slot}</Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-              </View>
-            ))}
-          </ScrollView>
-        </SafeAreaView>
-      </Modal>
-
-      {/* Floating Support Button (draggable) */}
-      <Animated.View
-        style={[s.supportBtnWrap, { transform: pan.getTranslateTransform() }]}
-        {...panResponder.panHandlers}
-      >
-        <TouchableOpacity
-          style={s.supportBtn}
-          activeOpacity={0.85}
-          onPress={() => setShowSupportModal(true)}
-        >
-          <Text style={s.supportBtnIcon}>💬</Text>
-          <Text style={s.supportBtnText}>{t.support}</Text>
-        </TouchableOpacity>
-      </Animated.View>
-
-      {/* Support Channels Modal */}
-      <Modal visible={showSupportModal} transparent animationType="slide">
-        <View style={s.supportModalOverlay}>
-          <View style={s.supportModalContent}>
-            <View style={s.supportModalHeader}>
-              <Text style={s.supportModalTitle}>{t.supportChannels}</Text>
-              <TouchableOpacity onPress={() => setShowSupportModal(false)}>
-                <Text style={s.supportCloseBtn}>✕</Text>
+        <ModalSafeAreaProvider>
+          <SafeAreaView style={s.modalContainer} edges={['top', 'bottom']}>
+            <View style={s.modalHeader}>
+              <TouchableOpacity onPress={() => setShowEditModal(false)}>
+                <Text style={s.modalCancel}>{t.cancel}</Text>
+              </TouchableOpacity>
+              <Text style={s.modalTitle}>{t.editTitle}</Text>
+              <TouchableOpacity onPress={handleSave} disabled={saving}>
+                {saving ? (
+                  <ActivityIndicator size="small" color={C.accent} />
+                ) : (
+                  <Text style={s.modalSave}>{t.save}</Text>
+                )}
               </TouchableOpacity>
             </View>
-            <FlatList
-              data={supportChannels}
-              keyExtractor={(item) => item.id}
-              renderItem={({ item }) => (
-                <TouchableOpacity
-                  style={s.supportChannelItem}
-                  onPress={() => handleSelectSupport(item)}
-                >
-                  <View style={[s.supportIconBox, { backgroundColor: item.color }]}>
-                    {item.iconType === 'zalo' ? (
-                      <Image source={require('../../assets/images/zalo-logo.png')} style={{ width: 36, height: 36 }} resizeMode="contain" />
-                    ) : item.iconType === 'fa5' ? (
-                      <FontAwesome5 name={item.iconName} size={22} color="#fff" />
-                    ) : (
-                      <Text style={[s.supportIconText, item.iconColor ? { color: item.iconColor } : undefined]}>{item.iconName}</Text>
-                    )}
+            <ScrollView contentContainerStyle={s.modalContent}>
+              {[today, tomorrowDate].map((dateStr) => (
+                <View key={dateStr} style={s.modalDaySection}>
+                  <Text style={s.modalDayLabel}>{formatDateLabel(dateStr)}  ({dateStr})</Text>
+                  <View style={s.modalSlotWrap}>
+                    {SHIFT_SLOTS.map((slot) => {
+                      const active = (editSlots[dateStr] || []).includes(slot);
+                      return (
+                        <TouchableOpacity
+                          key={slot}
+                          style={[s.slotChip, active && s.slotChipActive]}
+                          onPress={() => toggleEditSlot(dateStr, slot)}
+                          activeOpacity={0.85}
+                        >
+                          <Text style={[s.slotChipText, active && s.slotChipTextActive]}>{slot}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
                   </View>
-                  <Text style={s.supportChannelName}>{item.name}</Text>
-                  <Text style={s.supportChevron}>›</Text>
-                </TouchableOpacity>
-              )}
-            />
-          </View>
-        </View>
+                </View>
+              ))}
+            </ScrollView>
+          </SafeAreaView>
+        </ModalSafeAreaProvider>
+      </Modal>
+
+      <Modal visible={showNotifications} animationType="slide" onRequestClose={() => setShowNotifications(false)}>
+        <ModalSafeAreaProvider>
+          <NotificationScreen
+            onClose={() => setShowNotifications(false)}
+            onOpenRelated={(target) => {
+              setShowNotifications(false);
+              if (target === 'job') {
+                router.push('/(tabs)/therapist-home');
+                return;
+              }
+              router.push('/(tabs)/therapist-schedule');
+            }}
+          />
+        </ModalSafeAreaProvider>
+      </Modal>
+
+      <Modal visible={showChat} animationType="slide" onRequestClose={() => setShowChat(false)}>
+        <ModalSafeAreaProvider>
+          <ChatScreen onClose={() => setShowChat(false)} />
+        </ModalSafeAreaProvider>
       </Modal>
 
     </SafeAreaView>
@@ -440,8 +413,15 @@ export default function TherapistScheduleScreen() {
 }
 
 const s = StyleSheet.create({
-  container: { flex: 1, backgroundColor: C.bg },
-  contentWrap: { paddingHorizontal: 16, paddingBottom: 100, paddingTop: 10 },
+  container: { flex: 1, width: '100%', maxWidth: '100%', alignSelf: 'stretch', backgroundColor: C.bg },
+  scroll: { flex: 1, width: '100%' },
+  contentWrap: {
+    width: '100%',
+    flexGrow: 1,
+    paddingHorizontal: 16,
+    paddingBottom: 100,
+    paddingTop: 10,
+  },
   headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   avatar: { width: 36, height: 36, borderRadius: 18 },
@@ -457,6 +437,23 @@ const s = StyleSheet.create({
     width: 36, height: 36, borderRadius: 18, borderWidth: 1, borderColor: C.line,
     alignItems: 'center', justifyContent: 'center', backgroundColor: '#EDE0E2',
   },
+  unreadBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    paddingHorizontal: 3,
+    backgroundColor: '#E53935',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  unreadBadgeText: {
+    color: '#fff',
+    fontSize: 9,
+    fontWeight: '800',
+  },
   balanceWrap: {
     marginTop: 12,
     backgroundColor: C.card,
@@ -470,11 +467,11 @@ const s = StyleSheet.create({
   balanceLabel: { fontSize: 13, color: '#666666', fontWeight: '500' },
   balanceRow: { marginTop: 4, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   balanceValue: {
-    fontSize: 34,
-    lineHeight: 38,
-    fontWeight: '800',
+    fontSize: 24,
+    lineHeight: 30,
+    fontWeight: '400',
     color: C.text,
-    letterSpacing: -0.3,
+    letterSpacing: 0,
   },
   topUpBtn: { backgroundColor: C.accent, borderRadius: 20, paddingHorizontal: 20, paddingVertical: 10 },
   topUpBtnText: { color: '#FFFFFF', fontSize: 14, fontWeight: '700' },
@@ -517,70 +514,4 @@ const s = StyleSheet.create({
   modalDaySection: { marginBottom: 24 },
   modalDayLabel: { fontSize: 16, fontWeight: '800', color: C.text, marginBottom: 12 },
   modalSlotWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  // Floating support button
-  supportBtnWrap: {
-    position: 'absolute',
-    right: 16,
-    bottom: 18,
-    zIndex: 100,
-  },
-  supportBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: C.accent,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 24,
-    shadowColor: '#000',
-    shadowOpacity: 0.15,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 6,
-  },
-  supportBtnIcon: { fontSize: 18 },
-  supportBtnText: { color: '#fff', fontWeight: '700', fontSize: 13 },
-  // Support modal
-  supportModalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.38)',
-    justifyContent: 'flex-end',
-  },
-  supportModalContent: {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingBottom: 30,
-    maxHeight: '60%',
-  },
-  supportModalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: C.line,
-  },
-  supportModalTitle: { fontSize: 17, fontWeight: '800', color: C.text },
-  supportCloseBtn: { fontSize: 24, color: '#666666', fontWeight: '400' },
-  supportChannelItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: C.line,
-    gap: 12,
-  },
-  supportIconBox: {
-    width: 44,
-    height: 44,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  supportIconText: { fontSize: 13, fontWeight: '800', color: '#fff' },
-  supportChannelName: { fontSize: 15, fontWeight: '600', color: C.text, flex: 1 },
-  supportChevron: { fontSize: 18, color: '#666666' },
 });
