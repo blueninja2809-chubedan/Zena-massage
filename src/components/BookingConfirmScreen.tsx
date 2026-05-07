@@ -236,6 +236,7 @@ export default function BookingConfirmScreen({
           distance: Math.max(0.2, Number(item.distanceFromCenter) || 5),
           latitude: item.currentLatitude,
           longitude: item.currentLongitude,
+          locationUpdatedAt: item.locationUpdatedAt,
           workingCity: item.workingCity ?? '',
         })));
       } catch {
@@ -823,6 +824,16 @@ export default function BookingConfirmScreen({
 }
 
 // ─── Mock Nearby Therapists ─────────────────────────────────
+/** GPS của KTV cũ hơn 20 phút thì bỏ, tránh hiện khoảng cách sai khi KTV không còn ở đó. */
+const MAX_GPS_AGE_MS = 20 * 60 * 1000;
+
+function isFreshGps(locationUpdatedAt: string | undefined): boolean {
+  if (!locationUpdatedAt) return false;
+  const updated = new Date(locationUpdatedAt).getTime();
+  if (!Number.isFinite(updated)) return false;
+  return Date.now() - updated <= MAX_GPS_AGE_MS;
+}
+
 interface NearbyTherapist {
   id: string;
   name: string;
@@ -832,6 +843,7 @@ interface NearbyTherapist {
   distance: number;
   latitude?: number;
   longitude?: number;
+  locationUpdatedAt?: string;
   /** Dùng với applyCustomerDistanceToTherapists khi KTV chưa có GPS */
   workingCity?: string;
   /** KTV đang được đặt trong luồng này — luôn hiện trên bản đồ */
@@ -1085,7 +1097,11 @@ function generateNearbyPositions(
   therapists: NearbyTherapist[],
 ): TherapistMapPoint[] {
   const rows: TherapistMapPoint[] = therapists.map((t) => {
-    const hasExactCoordinate = Number.isFinite(t.latitude) && Number.isFinite(t.longitude);
+    const hasFreshGps =
+      Number.isFinite(t.latitude) &&
+      Number.isFinite(t.longitude) &&
+      isFreshGps(t.locationUpdatedAt);
+    const hasExactCoordinate = hasFreshGps;
     const coordinate = hasExactCoordinate
       ? { latitude: Number(t.latitude), longitude: Number(t.longitude) }
       : coordinateAtDistanceKm(
@@ -1155,6 +1171,7 @@ function BookingSearchModal({
       distance: Math.max(0.12, Number(therapist.distanceFromCenter) || 0.5),
       latitude: therapist.currentLatitude,
       longitude: therapist.currentLongitude,
+      locationUpdatedAt: therapist.locationUpdatedAt,
       workingCity: therapist.workingCity ?? '',
       isAssigned: true,
     };
@@ -1203,11 +1220,12 @@ function BookingSearchModal({
       try {
         const rows = await getTherapists({ bypassCache: true });
         const eligible = await filterTherapistsEligibleForBookingNow(rows);
-        const next: Record<string, { latitude?: number; longitude?: number; distance?: number }> = {};
+        const next: Record<string, { latitude?: number; longitude?: number; locationUpdatedAt?: string; distance?: number }> = {};
         for (const r of eligible) {
           next[r.id] = {
             latitude: r.currentLatitude,
             longitude: r.currentLongitude,
+            locationUpdatedAt: r.locationUpdatedAt,
             distance: Math.max(0.1, Number(r.distanceFromCenter) || 0),
           };
         }
@@ -1231,7 +1249,7 @@ function BookingSearchModal({
       return {
         ...t,
         ...(typeof L.latitude === 'number' && typeof L.longitude === 'number'
-          ? { latitude: L.latitude, longitude: L.longitude }
+          ? { latitude: L.latitude, longitude: L.longitude, locationUpdatedAt: L.locationUpdatedAt }
           : {}),
         ...(typeof L.distance === 'number' && Number.isFinite(L.distance)
           ? { distance: Math.max(0.1, L.distance) }

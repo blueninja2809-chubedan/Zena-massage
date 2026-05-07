@@ -535,19 +535,39 @@ export function NotificationProvider({
     setJobOffer(null);
   }, [user?.authUid]);
 
-  // Register push token when user logs in
+  // Register push token mỗi khi đổi user và mỗi khi app vào foreground (token có thể đổi sau update OS).
   useEffect(() => {
-    if (!user?.authUid) {
+    const uid = user?.authUid;
+    if (!uid) {
       setExpoPushToken(null);
       return;
     }
 
-    registerForPushNotificationsAsync().then((token) => {
-      if (token) {
+    let cancelled = false;
+    const ensureToken = async () => {
+      try {
+        const token = await registerForPushNotificationsAsync();
+        if (cancelled || !token) return;
         setExpoPushToken(token);
-        savePushTokenToProfile(user.authUid!, token);
+        await savePushTokenToProfile(uid, token);
+      } catch (e) {
+        if (__DEV__) console.warn('[Notifications] register failed:', e);
       }
+    };
+
+    void ensureToken();
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') void ensureToken();
     });
+    return () => {
+      cancelled = true;
+      sub.remove();
+    };
+  }, [user?.authUid]);
+
+  // Reset bộ nhớ id đã thấy khi đổi user, tránh mang state cũ.
+  useEffect(() => {
+    seenNotificationIds.current = new Set();
   }, [user?.authUid]);
 
   // Listen for incoming notifications (foreground, native only)
@@ -645,17 +665,23 @@ export function NotificationProvider({
 
           setBanner({ title, body, type: row.payload?.type });
 
-          if (
-            Platform.OS !== 'web' &&
-            Notifications &&
-            (row.payload?.type === 'job' || row.payload?.type === 'booking')
-          ) {
+          // Luôn schedule local notification để app PHÁT TIẾNG + tăng badge ngay cả khi đang foreground.
+          // (Notification handler đã set shouldPlaySound: true → tiếng "default" của hệ điều hành.)
+          if (Platform.OS !== 'web' && Notifications) {
+            const channel =
+              row.payload?.type === 'job' || row.payload?.type === 'booking' || row.payload?.type === 'review'
+                ? 'booking'
+                : row.payload?.type === 'promotion'
+                ? 'promotion'
+                : 'default';
             void Notifications.scheduleNotificationAsync({
               content: {
                 title,
                 body,
                 sound: 'default',
-                data: { type: row.payload?.type ?? 'booking', relatedId: row.payload?.relatedId },
+                data: { type: row.payload?.type ?? 'default', relatedId: row.payload?.relatedId },
+                ...(Platform.OS === 'android' ? { channelId: channel } : {}),
+                ...(Platform.OS === 'ios' ? { interruptionLevel: 'timeSensitive' as const } : {}),
               },
               trigger: null,
             }).catch(() => {});

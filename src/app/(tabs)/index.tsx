@@ -1,5 +1,6 @@
 import Feather from '@expo/vector-icons/Feather';
 import { useFocusEffect } from '@react-navigation/native';
+import { Image as ExpoImage } from 'expo-image';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
@@ -44,6 +45,7 @@ import {
   applyCustomerDistanceToTherapists,
   getStoredCustomerLocation,
   refreshCustomerLocation,
+  resolveCustomerLocationForDistance,
 } from '@/lib/location';
 import { scheduleNonBlockingWork } from '@/lib/scheduleNonBlockingWork';
 import { canUseAppFeatures } from '@/lib/session';
@@ -171,6 +173,9 @@ const COLORS = {
 
 export default function HomeScreen() {
   const { width: screenWidth, height: windowHeight } = useWindowDimensions();
+  /** RN đôi khi trả 0 một frame đầu — tránh height/width = 0 khiến banner trắng. */
+  const layoutW = Math.max(1, screenWidth);
+  const layoutH = Math.max(1, windowHeight);
   const tabletLayout = useTabletLayout();
   const insets = useSafeAreaInsets();
   const { language } = useLanguage();
@@ -240,9 +245,13 @@ export default function HomeScreen() {
     setShowMassageHome(true);
   }, []);
 
+  const distanceAnchor = useMemo(
+    () => resolveCustomerLocationForDistance(customerLocation, selectedCity),
+    [customerLocation, selectedCity],
+  );
   const withLiveDistance = useCallback(
-    (list: Therapist[]) => applyCustomerDistanceToTherapists(list, customerLocation),
-    [customerLocation],
+    (list: Therapist[]) => applyCustomerDistanceToTherapists(list, distanceAnchor),
+    [distanceAnchor],
   );
   const contentColumnMax = tabletLayout.isTablet ? 1040 : screenWidth;
   const contentMaxWidth = contentColumnMax;
@@ -271,10 +280,14 @@ export default function HomeScreen() {
   const bottomContentSpacer = tabletLayout.isTablet ? 20 : Math.max(12, insets.bottom + 8);
 
   /** Promo strip: wider aspect + max height so it does not dominate the scroll area */
-  const homePromoBannerHeight = Math.round(
-    Math.min(screenWidth / 2.35, windowHeight * 0.18, tabletLayout.isTablet ? 220 : 200),
+  const homePromoBannerHeight = Math.max(
+    120,
+    Math.round(Math.min(layoutW / 2.35, layoutH * 0.18, tabletLayout.isTablet ? 220 : 200)),
   );
-  const resolvedHomeBannerWidth = homeBannerWidth > 0 ? homeBannerWidth : Math.round(screenWidth * 0.96);
+  const resolvedHomeBannerWidth = Math.max(
+    1,
+    homeBannerWidth > 0 ? homeBannerWidth : Math.round(layoutW * 0.96),
+  );
   const homeSlides = useMemo(
     () => ([
       require('@/assets/images/home-slide-1.jpg'),
@@ -382,7 +395,7 @@ export default function HomeScreen() {
     let cancelled = false;
     void (async () => {
       // Lấy GPS thật để hiện distance chính xác. Nếu permission chưa cấp,
-      // AppLocationBootstrap đã chặn UI — chỗ này dùng `true` để re-prompt
+      // AppLocationBootstrap đã prompt ở root — chỗ này dùng `true` nếu còn `undetermined`.
       // ngay khi permission còn `undetermined`.
       const live = await refreshCustomerLocation({ askPermissionIfNeeded: true });
       const fallback = live ?? (await getStoredCustomerLocation());
@@ -396,10 +409,10 @@ export default function HomeScreen() {
   }, []);
 
   useEffect(() => {
-    if (!customerLocation) return;
+    if (!distanceAnchor) return;
     setTherapists((prev) => withLiveDistance(prev));
     setFeaturedTherapists((prev) => withLiveDistance(prev));
-  }, [customerLocation, withLiveDistance]);
+  }, [distanceAnchor, withLiveDistance]);
 
   const resolveTherapistCity = (item: Therapist) => {
     if (item.workingCity?.trim()) {
@@ -701,10 +714,11 @@ export default function HomeScreen() {
         <View style={[styles.gridContainer, tabletLayout.isTablet && { height: gridHeight, gap: gridGap }]}>
           {/* Large card — Massage tại nhà */}
           <TouchableOpacity style={styles.gridCardLarge} activeOpacity={0.85} onPress={() => requireAuthTo(() => openMassageHomeWithService(null))}>
-            <Image
+            <ExpoImage
               source={require('@/assets/images/massage-home-banner.png')}
-              style={{ width: '100%', height: '100%' }}
-              resizeMode={cardImageResizeMode}
+              style={styles.gridBannerFill}
+              contentFit={cardImageResizeMode === 'contain' ? 'contain' : 'cover'}
+              cachePolicy="memory-disk"
             />
           </TouchableOpacity>
 
@@ -720,10 +734,11 @@ export default function HomeScreen() {
               activeOpacity={0.85}
               onPress={() => requireAuthTo(() => setShowMassageLocation(true))}
             >
-              <Image
+              <ExpoImage
                 source={require('@/assets/images/promo-location-banner.png')}
-                style={{ width: '100%', height: '100%' }}
-                resizeMode={cardImageResizeMode}
+                style={styles.gridBannerFill}
+                contentFit={cardImageResizeMode === 'contain' ? 'contain' : 'cover'}
+                cachePolicy="memory-disk"
               />
             </TouchableOpacity>
 
@@ -789,10 +804,11 @@ export default function HomeScreen() {
                 activeOpacity={0.92}
                 onPress={() => requireAuthTo(() => openMassageHomeWithService(null))}
               >
-                <Image
+                <ExpoImage
                   source={src}
                   style={[styles.homePromoBannerImage, { width: resolvedHomeBannerWidth, height: homePromoBannerHeight }]}
-                  resizeMode="cover"
+                  contentFit="cover"
+                  cachePolicy="memory-disk"
                 />
               </TouchableOpacity>
             ))}
@@ -1297,6 +1313,11 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     overflow: 'hidden',
     backgroundColor: '#FFFFFF',
+    position: 'relative',
+    minHeight: 1,
+  },
+  gridBannerFill: {
+    ...StyleSheet.absoluteFillObject,
   },
   gridColRight: {
     width: '42%',
@@ -1315,6 +1336,8 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     overflow: 'hidden',
     aspectRatio: 960 / 600,
+    position: 'relative',
+    backgroundColor: '#F0EBE4',
   },
   gridCardSmallImgTablet: {
     flex: 1,
@@ -1322,6 +1345,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     backgroundColor: '#FFFFFF',
     minHeight: 110,
+    position: 'relative',
   },
   gridCardBg: {
     flex: 1,

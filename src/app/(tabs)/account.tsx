@@ -2207,10 +2207,11 @@ const s = StyleSheet.create({
     minWidth: 0,
     flexBasis: 0,
     backgroundColor: '#FFFFFF',
-    position: 'relative',
   },
-  /** Cover full card; parent clips radius (avoid contain → side letterboxing). */
-  promoRewardBannerImg: StyleSheet.absoluteFillObject,
+  promoRewardBannerImg: {
+    width: '100%',
+    height: '100%',
+  },
   promoTitle: { fontSize: 13, fontWeight: '700', color: COLORS.text, lineHeight: 19 },
   promoArrow: { fontSize: 18, color: COLORS.primary, fontWeight: '700' },
 

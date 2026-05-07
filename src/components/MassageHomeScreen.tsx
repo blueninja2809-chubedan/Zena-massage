@@ -18,6 +18,7 @@ import {
   applyCustomerDistanceToTherapists,
   getStoredCustomerLocation,
   refreshCustomerLocation,
+  resolveCustomerLocationForDistance,
 } from '@/lib/location';
 import {
   persistHomeSelectedCity,
@@ -107,7 +108,10 @@ export default function MassageHomeScreen({
   const isVipMember = !!user?.isVipMember;
   const isEn = language === 'en';
 
-  const [therapists, setTherapists] = useState<Therapist[]>([]);
+  const [baseTherapists, setBaseTherapists] = useState<Therapist[]>([]);
+  const [customerCoords, setCustomerCoords] = useState<{ latitude: number; longitude: number } | null>(
+    null,
+  );
   const [loading, setLoading] = useState(true);
   const [searchText, setSearchText] = useState('');
   const [sortBy, setSortBy] = useState<'nearby' | 'popular' | null>('nearby');
@@ -142,11 +146,12 @@ export default function MassageHomeScreen({
       try {
         const data = await getTherapists({ bypassCache: true });
         // Bắt buộc xin quyền (`askPermissionIfNeeded: true`) để mọi user có distance chính xác.
-        // Nếu user denied, AppLocationBootstrap đã chặn UI app — chỗ này chỉ là phòng hờ.
+        // Nếu user denied, vẫn cho dùng app; chỗ này re-prompt khi còn `undetermined`.
         const live = await refreshCustomerLocation({ askPermissionIfNeeded: true });
         const fallback = live ?? (await getStoredCustomerLocation());
         if (cancelled) return;
-        setTherapists(applyCustomerDistanceToTherapists(data, fallback));
+        setBaseTherapists(data);
+        setCustomerCoords(fallback);
       } catch (error) {
         console.error('Error loading therapists:', error);
       } finally {
@@ -159,6 +164,16 @@ export default function MassageHomeScreen({
       cancelled = true;
     };
   }, []);
+
+  const distanceAnchor = React.useMemo(
+    () => resolveCustomerLocationForDistance(customerCoords, selectedCity),
+    [customerCoords, selectedCity],
+  );
+
+  const therapists = React.useMemo(
+    () => applyCustomerDistanceToTherapists(baseTherapists, distanceAnchor),
+    [baseTherapists, distanceAnchor],
+  );
 
   useEffect(() => {
     if (selectedCityProp) {

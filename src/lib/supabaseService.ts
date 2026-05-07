@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { debugLog } from '@/lib/debugLog';
 import * as FileSystem from 'expo-file-system/legacy';
 import { mapGlowPaymentMethodIdToZenaUnknown } from '@/lib/paymentMethodId';
-import { sendPushToUser } from '@/lib/pushNotifications';
+import { sendPushToUser, sendPushToUsers } from '@/lib/pushNotifications';
 import {
   findVirtualTherapistById,
   getVirtualTherapistShifts,
@@ -429,8 +429,12 @@ function mapTherapist(row: JsonObject): Therapist {
     photoList[0],
     profileGalleryAvatar,
   ]);
-  const latitudeRaw = Number(row.current_latitude);
-  const longitudeRaw = Number(row.current_longitude);
+  const latitudeRaw = Number(
+    row.current_latitude ?? (row as { currentLatitude?: unknown }).currentLatitude,
+  );
+  const longitudeRaw = Number(
+    row.current_longitude ?? (row as { currentLongitude?: unknown }).currentLongitude,
+  );
   const hasLiveCoords =
     Number.isFinite(latitudeRaw) &&
     Number.isFinite(longitudeRaw) &&
@@ -1952,6 +1956,19 @@ export async function getNotifications(userId: string): Promise<Notification[]> 
 }
 
 export async function createNotification(notificationData: Omit<Notification, 'id'>): Promise<void> {
+  // GỬI PUSH TRƯỚC (best-effort) — đảm bảo KTV/khách thấy banner + nghe tiếng kể cả khi
+  // insert vào DB bị RLS chặn / timeout. Insert DB chỉ để badge số "đã đọc" và lịch sử.
+  try {
+    await sendPushToUser(
+      notificationData.userId,
+      notificationData.title,
+      notificationData.message,
+      { type: notificationData.type, relatedId: notificationData.relatedId },
+    );
+  } catch (pushError) {
+    if (__DEV__) console.warn('[notifications] push failed:', pushError);
+  }
+
   const { error } = await withTimeout(
     supabase.from('notifications').insert({
       user_id: notificationData.userId,
@@ -1961,18 +1978,8 @@ export async function createNotification(notificationData: Omit<Notification, 'i
     }),
   );
   if (error) {
-    throw error;
-  }
-
-  try {
-    await sendPushToUser(
-      notificationData.userId,
-      notificationData.title,
-      notificationData.message,
-      { type: notificationData.type, relatedId: notificationData.relatedId },
-    );
-  } catch {
-    // Push is best-effort, don't fail the notification creation
+    if (__DEV__) console.warn('[notifications] insert failed:', error.message);
+    // Không throw — đẩy push đã thành công, không nên fail luồng booking phía client.
   }
 }
 
@@ -2063,7 +2070,7 @@ export async function notifyReviewReminder(
   });
 }
 
-/** Send new job notification to all therapists in the same city */
+/** Send new job notification to all therapists in the same city (gửi push hàng loạt + insert DB). */
 export async function notifyNewJobForCity(
   city: string,
   bookingId: string,
@@ -2079,19 +2086,39 @@ export async function notifyNewJobForCity(
     ? therapistIds.filter((id) => id !== excludeTherapistId)
     : therapistIds;
 
+  if (targets.length === 0) return;
+
+  const title = `Việc mới tại ${city}`;
+  const message = `Khách ${customerName} cần ${service} vào ${date} lúc ${time} tại ${address}. Ứng tuyển ngay!`;
+
+  // 1) Bulk push (1 request đến Expo cho mọi KTV).
+  try {
+    await sendPushToUsers(targets, title, message, { type: 'job', relatedId: bookingId });
+  } catch (e) {
+    if (__DEV__) console.warn('[notifyNewJobForCity] bulk push failed:', e);
+  }
+
+  // 2) Insert notifications DB cho lịch sử & realtime modal.
   await Promise.all(
     targets.map((therapistUserId) =>
-      createNotification({
-        userId: therapistUserId,
-        title: `Việc mới tại ${city}`,
-        titleEn: `New Job in ${city}`,
-        message: `Khách ${customerName} cần ${service} vào ${date} lúc ${time} tại ${address}. Ứng tuyển ngay!`,
-        messageEn: `Client ${customerName} needs ${service} on ${date} at ${time} at ${address}. Apply now!`,
-        type: 'job',
-        relatedId: bookingId,
-        isRead: false,
-        createdAt: new Date().toISOString(),
-      }).catch(() => {}),
+      withTimeout(
+        supabase.from('notifications').insert({
+          user_id: therapistUserId,
+          is_read: false,
+          payload: {
+            userId: therapistUserId,
+            title,
+            titleEn: `New Job in ${city}`,
+            message,
+            messageEn: `Client ${customerName} needs ${service} on ${date} at ${time} at ${address}. Apply now!`,
+            type: 'job',
+            relatedId: bookingId,
+            isRead: false,
+            createdAt: new Date().toISOString(),
+          },
+          created_at: new Date().toISOString(),
+        }),
+      ).catch(() => {}),
     ),
   );
 }

@@ -252,6 +252,54 @@ export function haversineKm(a: Coordinates, b: Coordinates): number {
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(x)));
 }
 
+/** Bbox lục địa VN (có lề) — dùng phát hiện GPS simulator / nước ngoài. */
+const VN_BOUNDS_LAT_MIN = 8.15;
+const VN_BOUNDS_LAT_MAX = 23.95;
+const VN_BOUNDS_LNG_MIN = 101.8;
+const VN_BOUNDS_LNG_MAX = 110.2;
+
+function isInVietnamMainlandBBox(coords: Coordinates): boolean {
+  return (
+    coords.latitude >= VN_BOUNDS_LAT_MIN &&
+    coords.latitude <= VN_BOUNDS_LAT_MAX &&
+    coords.longitude >= VN_BOUNDS_LNG_MIN &&
+    coords.longitude <= VN_BOUNDS_LNG_MAX
+  );
+}
+
+/**
+ * Chọn điểm neo của khách để tính km / sort "Gần tôi".
+ *
+ * - Ưu tiên GPS thật khi **gần** tỉnh đang xem (hoặc đang trong lãnh thổ VN và không chọn tỉnh).
+ * - Nếu GPS cách **tâm tỉnh đã chọn** quá xa (vd. simulator Mỹ + UI "Hà Nội") → dùng tâm tỉnh,
+ *   để km phản ánh khoảng cách trong vùng đang lọc và các KTV có live GPS **khác nhau được**.
+ * - Không có tọa độ thiết bị → chỉ dùng tâm tỉnh nếu đã chọn tỉnh.
+ */
+export function resolveCustomerLocationForDistance(
+  deviceCoords: Coordinates | null,
+  selectedCity: string | null | undefined,
+): Coordinates | null {
+  const city = typeof selectedCity === 'string' ? selectedCity.trim() : '';
+  const cityCentroid = city ? getProvinceCentroid(city) : null;
+
+  if (!isValidCoordinates(deviceCoords)) {
+    return cityCentroid;
+  }
+
+  if (cityCentroid) {
+    const kmFromCityCenter = haversineKm(deviceCoords, cityCentroid);
+    if (kmFromCityCenter > 450) {
+      return cityCentroid;
+    }
+    return deviceCoords;
+  }
+
+  if (!isInVietnamMainlandBBox(deviceCoords)) {
+    return null;
+  }
+  return deviceCoords;
+}
+
 /**
  * Tính khoảng cách (km) từ khách → KTV.
  *
