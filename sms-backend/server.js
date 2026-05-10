@@ -7,6 +7,7 @@ const dns = require('dns');
 const axios = require('axios');
 const FormData = require('form-data');
 const path = require('path');
+const { registerPushFcmRoute } = require('./pushFcm');
 
 // Luôn load .env cạnh server.js — tránh PASSCODE trống khi chạy node từ cwd khác (home vs công ty).
 require('dotenv').config({ path: path.join(__dirname, '.env') });
@@ -416,6 +417,12 @@ app.get('/health', (_req, res) => {
     message: 'SMS backend is running',
     ts: new Date().toISOString(),
   });
+});
+
+registerPushFcmRoute(app, {
+  supabaseUrl: SUPABASE_URL,
+  serviceKey: SUPABASE_SERVICE_KEY,
+  requireApiKey,
 });
 
 app.post('/api/send-otp', requireApiKey, async (req, res) => {
@@ -860,6 +867,12 @@ app.listen(PORT, HOST, () => {
   console.log(
     `[SMS-BACKEND] Listening http://${HOST}:${PORT}/health — firewall/security group must allow inbound TCP ${PORT}`,
   );
+  try {
+    const { getMessagingOrNull } = require('./pushFcm');
+    console.log('[SMS-BACKEND] FCM (Firebase Admin):', getMessagingOrNull() ? 'ready' : 'not configured');
+  } catch {
+    /* ignore */
+  }
   console.log(
     '[SMS-BACKEND] VietGuys env:',
     JSON.stringify({
