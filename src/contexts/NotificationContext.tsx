@@ -236,7 +236,7 @@ async function registerForPushNotificationsAsync(): Promise<string | null> {
         importance: Notifications.AndroidImportance.MAX,
         vibrationPattern: [0, 250, 250, 250],
         lightColor: '#5F8F47',
-        sound: 'default',
+        sound: true,
       });
     await channel('default', 'Mặc định');
     await channel('booking', 'Đặt lịch & việc mới');
@@ -271,10 +271,10 @@ async function registerForPushNotificationsAsync(): Promise<string | null> {
 
 // ─── Helper: save token to Supabase profiles ─────────────────────────
 async function savePushTokenToProfile(uid: string, token: string) {
-  const { error } = await supabase
-    .from('profiles')
-    .update({ push_token: token })
-    .eq('id', uid);
+  const { error } = await supabase.rpc('save_push_token', {
+    p_uid: uid,
+    p_token: token,
+  });
   if (error) {
     console.warn('[Notifications] Failed to save push token:', error.message);
   }
@@ -678,7 +678,7 @@ export function NotificationProvider({
               content: {
                 title,
                 body,
-                sound: 'default',
+                sound: true,
                 data: { type: row.payload?.type ?? 'default', relatedId: row.payload?.relatedId },
                 ...(Platform.OS === 'android' ? { channelId: channel } : {}),
                 ...(Platform.OS === 'ios' ? { interruptionLevel: 'timeSensitive' as const } : {}),
