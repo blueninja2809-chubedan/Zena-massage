@@ -60,12 +60,10 @@ export default function TherapistOrderHistoryScreen({ onClose }: { onClose: () =
   const { getTherapistBookings, updateStatus } = useBookings();
   const [filter, setFilter] = useState<BookingStatus | 'all'>('all');
   const [selected, setSelected] = useState<SharedBooking | null>(null);
-  const displayName = user?.displayName || user?.phoneNumber || 'KTV';
-
   const rows = useMemo(() => {
-    const all = getTherapistBookings(displayName).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    const all = getTherapistBookings(user?.authUid ?? '').sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     return filter === 'all' ? all : all.filter((item) => item.status === filter);
-  }, [displayName, filter, getTherapistBookings]);
+  }, [user?.authUid, filter, getTherapistBookings]);
 
   const handleSetProcessing = (item: SharedBooking) => {
     updateStatus(item.id, 'in-progress', {

@@ -25,12 +25,10 @@ function getRankByCompletedOrders(total: number): TierKey {
 export default function TherapistRankScreen({ onClose }: { onClose: () => void }) {
   const { user } = useUser();
   const { getTherapistBookings } = useBookings();
-  const displayName = user?.displayName || user?.phoneNumber || 'KTV';
-
   const completedCount = useMemo(() => {
-    const rows: SharedBooking[] = getTherapistBookings(displayName);
+    const rows: SharedBooking[] = getTherapistBookings(user?.authUid ?? '');
     return rows.filter((item) => item.status === 'completed').length;
-  }, [displayName, getTherapistBookings]);
+  }, [user?.authUid, getTherapistBookings]);
 
   const currentTier = getRankByCompletedOrders(completedCount);
   const current = tierConfig[currentTier];

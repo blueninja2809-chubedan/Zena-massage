@@ -87,8 +87,7 @@ export default function TherapistEarningsScreen() {
       .catch(() => {});
   }, [user?.authUid]);
 
-  const displayName = user?.displayName || user?.phoneNumber || 'KTV';
-  const allBookings = getTherapistBookings(displayName);
+  const allBookings = getTherapistBookings(user?.authUid ?? '');
 
   // Filter bookings by period and compute earnings
   const { filteredBookings, completedCount, pendingCount } = useMemo(() => {

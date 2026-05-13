@@ -208,13 +208,12 @@ export default function TherapistDashboard() {
   };
 
   const displayName = user?.displayName || user?.phoneNumber || 'KTV';
-  const myNamedBookings = getTherapistBookings(displayName);
+  const myNamedBookings = getTherapistBookings(user?.authUid ?? '');
   const workingCityFilter =
     user?.workingCity ||
     (selectedCity !== t.all && selectedCity !== 'Tất cả' ? selectedCity : '') ||
     DEFAULT_CITY;
   const inboxBookings = getTherapistJobInbox({
-    displayName,
     therapistUid: user?.authUid ?? '',
     workingCity: workingCityFilter,
   });

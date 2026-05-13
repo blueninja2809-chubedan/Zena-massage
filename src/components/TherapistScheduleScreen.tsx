@@ -150,8 +150,7 @@ export default function TherapistScheduleScreen() {
   tomorrowD.setDate(tomorrowD.getDate() + 1);
   const tomorrowDate = getLocalDateString(tomorrowD);
 
-  const displayName = user?.displayName || user?.phoneNumber || 'KTV';
-  const allBookings = getTherapistBookings(displayName);
+  const allBookings = getTherapistBookings(user?.authUid ?? '');
 
   const todayBookings = useMemo(
     () => allBookings.filter((b) => b.date === today && b.status !== 'cancelled'),

@@ -94,11 +94,11 @@ interface BookingsContextType {
   getReviewsForTherapist: (therapistId: string) => UserReview[];
   hasReviewed: (bookingId: string) => boolean;
   getCustomerBookings: (phone: string) => SharedBooking[];
-  getTherapistBookings: (name: string) => SharedBooking[];
+  getTherapistBookings: (therapistId: string) => SharedBooking[];
   /** Đơn chờ: KTV được chỉ định + đơn cùng tỉnh/thành (phát sóng). */
-  getTherapistJobInbox: (opts: { displayName: string; therapistUid: string; workingCity: string }) => SharedBooking[];
-  getTodayBookings: (therapistName: string) => SharedBooking[];
-  getCompletedEarnings: (therapistName: string) => number;
+  getTherapistJobInbox: (opts: { therapistUid: string; workingCity: string }) => SharedBooking[];
+  getTodayBookings: (therapistId: string) => SharedBooking[];
+  getCompletedEarnings: (therapistId: string) => number;
   refreshBookings: () => Promise<void>;
   refreshCancelledBookings: () => Promise<void>;
 }
@@ -430,20 +430,20 @@ export function BookingsProvider({ children }: { children: React.ReactNode }) {
   );
 
   const getTherapistBookings = useCallback(
-    (name: string) => bookings.filter(b => b.therapistName === name || name === 'KTV'),
+    (therapistId: string) => bookings.filter(b => !therapistId || b.therapistId === therapistId),
     [bookings],
   );
 
   const getTherapistJobInbox = useCallback(
-    (opts: { displayName: string; therapistUid: string; workingCity: string }) => {
-      const { displayName, therapistUid, workingCity } = opts;
+    (opts: { therapistUid: string; workingCity: string }) => {
+      const { therapistUid, workingCity } = opts;
       const city = workingCity?.trim() || '';
-      console.log('[JobInbox] filter params: displayName=', displayName, 'therapistUid=', therapistUid, 'city=', city, 'total bookings=', bookings.length);
+      console.log('[JobInbox] filter params: therapistUid=', therapistUid, 'city=', city, 'total bookings=', bookings.length);
       return bookings.filter((b) => {
         if (b.status === 'cancelled') {
           return false;
         }
-        if (b.therapistName === displayName || displayName === 'KTV') {
+        if (!therapistUid || b.therapistId === therapistUid) {
           return true;
         }
         if (
@@ -466,19 +466,19 @@ export function BookingsProvider({ children }: { children: React.ReactNode }) {
   );
 
   const getTodayBookings = useCallback(
-    (therapistName: string) => {
-      const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    (therapistId: string) => {
+      const today = new Date().toISOString().slice(0, 10);
       return bookings.filter(
-        b => b.date === today && (b.therapistName === therapistName || therapistName === 'KTV'),
+        b => b.date === today && (!therapistId || b.therapistId === therapistId),
       );
     },
     [bookings],
   );
 
   const getCompletedEarnings = useCallback(
-    (therapistName: string) => {
+    (therapistId: string) => {
       return bookings
-        .filter(b => b.status === 'completed' && (b.therapistName === therapistName || therapistName === 'KTV'))
+        .filter(b => b.status === 'completed' && (!therapistId || b.therapistId === therapistId))
         .reduce((sum, b) => sum + b.price, 0);
     },
     [bookings],
