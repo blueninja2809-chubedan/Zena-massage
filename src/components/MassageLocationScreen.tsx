@@ -1,3 +1,4 @@
+import Feather from '@expo/vector-icons/Feather';
 import { AppColors } from '@/constants/appColors';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useUser } from '@/contexts/UserContext';
@@ -124,15 +125,17 @@ const translations = {
   },
 };
 
+// Đồng bộ palette với MassageHomeScreen để 2 màn cùng "ngôn ngữ" UI.
 const COLORS = {
   green: AppColors.primaryDark,
-  greenLight: AppColors.successBg,
+  greenLight: AppColors.primarySoft,
   bg: AppColors.bg,
-  white: AppColors.white,
+  white: '#fff',
   text: AppColors.text,
   subText: AppColors.textMuted,
-  border: AppColors.border,
+  border: '#E0E0E0',
   gold: '#F5A623',
+  goldBg: '#FFF8E1',
   red: AppColors.danger,
 };
 
@@ -163,6 +166,18 @@ interface LocationService {
 
 const FILTER_TAGS = ['Ưu đãi lần đầu', 'Giờ cao điểm', 'Giờ thấp điểm'];
 
+/** VI vẫn là canonical key (dùng để filter, match trong service.tags). */
+const FILTER_TAG_LABEL_EN: Record<string, string> = {
+  'Ưu đãi lần đầu': 'First-time offer',
+  'Giờ cao điểm': 'Peak hours',
+  'Giờ thấp điểm': 'Off-peak hours',
+};
+
+function getFilterTagLabel(tag: string, isEn: boolean): string {
+  if (!isEn) return tag;
+  return FILTER_TAG_LABEL_EN[tag] ?? tag;
+}
+
 const { width: SCREEN_W } = Dimensions.get('window');
 
 function toLocationService(item: Service): LocationService {
@@ -189,6 +204,7 @@ type SortType = 'nearby' | 'popular' | 'topRated';
 
 export default function MassageLocationScreen({ onClose }: { onClose?: () => void } = {}) {
   const { language } = useLanguage();
+  const isEn = language === 'en';
   const router = useRouter();
   const strings = translations[language as keyof typeof translations] || translations.vi;
 
@@ -251,34 +267,59 @@ export default function MassageLocationScreen({ onClose }: { onClose?: () => voi
 
   const renderServiceCard = ({ item }: { item: LocationService }) => {
     const firstTag = item.tags[0];
+    const tagBg =
+      firstTag === 'Giờ thấp điểm'
+        ? COLORS.green
+        : firstTag === 'Giờ cao điểm'
+          ? COLORS.red
+          : '#E67E22';
+
     return (
       <View style={styles.card}>
-        {/* Image */}
-        <View style={styles.cardImageWrap}>
-          <Image source={{ uri: item.image }} style={styles.cardImage} resizeMode="cover" />
-          {firstTag && (
-            <View style={[styles.imageTag, firstTag === 'Giờ thấp điểm' ? styles.imageTagGreen : firstTag === 'Giờ cao điểm' ? styles.imageTagRed : styles.imageTagOrange]}>
-              <Text style={styles.imageTagText}>{firstTag}</Text>
+        {/* Touch area: ảnh + thông tin (mở chi tiết) */}
+        <TouchableOpacity
+          style={styles.cardTouchArea}
+          activeOpacity={0.85}
+          onPress={() => setSelectedService(item)}
+        >
+          {/* Ảnh vuông bo góc nhẹ + badge banner đè trên */}
+          <View style={styles.avatarColumn}>
+            <View style={styles.avatarCircle}>
+              <Image source={{ uri: item.image }} style={styles.avatarImage} resizeMode="cover" />
+              {firstTag ? (
+                <View style={styles.tagChipBelowOuter} pointerEvents="none">
+                  <View style={[styles.tagChipBelowPill, { backgroundColor: tagBg }]}>
+                    <Text style={styles.tagChipBelowText} numberOfLines={1} maxFontSizeMultiplier={1.15}>
+                      {getFilterTagLabel(firstTag, isEn)}
+                    </Text>
+                  </View>
+                </View>
+              ) : null}
             </View>
-          )}
-        </View>
+          </View>
 
-        {/* Body */}
-        <View style={styles.cardBody}>
-          <Text style={styles.serviceName} numberOfLines={2}>{item.name}</Text>
-          <View style={styles.metaRow}>
-            <Text style={styles.starIcon}>⭐</Text>
-            <Text style={styles.ratingText}>{item.rating.toFixed(1)}</Text>
-            <Text style={styles.metaSep}>|</Text>
-            <Text style={styles.metaText}>⊙ {item.distance} {strings.km}</Text>
-          </View>
-          <View style={styles.priceRow}>
+          {/* Info: tên + rating + khoảng cách + giá */}
+          <View style={styles.cardInfo}>
+            <View style={styles.cardRow}>
+              <Text style={styles.therapistName} numberOfLines={1}>{item.name}</Text>
+            </View>
+            <View style={styles.ratingRow}>
+              <Feather name="star" size={13} color={COLORS.gold} />
+              <Text style={styles.ratingValue}>{item.rating.toFixed(1)}</Text>
+              <Text style={styles.reviewCount}>({item.reviewCount} {strings.reviewCount})</Text>
+            </View>
+            <View style={styles.distanceRow}>
+              <Feather name="map-pin" size={13} color={COLORS.subText} />
+              <Text style={styles.distanceText}>{item.distance} {strings.km}</Text>
+            </View>
             <Text style={styles.priceText}>{item.price.toLocaleString('vi-VN')} đ</Text>
-            <TouchableOpacity style={styles.bookBtn} onPress={() => setSelectedService(item)}>
-              <Text style={styles.bookBtnText}>{strings.book}</Text>
-            </TouchableOpacity>
           </View>
-        </View>
+        </TouchableOpacity>
+
+        {/* Nút Đặt — match MassageHomeScreen (bo tròn, ngang dòng khoảng cách) */}
+        <TouchableOpacity style={styles.bookButton} onPress={() => setSelectedService(item)}>
+          <Text style={styles.bookButtonText}>{strings.book}</Text>
+        </TouchableOpacity>
       </View>
     );
   };
@@ -297,57 +338,75 @@ export default function MassageLocationScreen({ onClose }: { onClose?: () => voi
       <StatusBar barStyle="dark-content" backgroundColor={COLORS.white} />
 
       <View style={styles.screenTop}>
-        {/* Header */}
+        {/* Header — mirror MassageHomeScreen: back / search / heart */}
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => onClose ? onClose() : router.back()} style={styles.backBtn}>
-            <Text style={styles.backIcon}>←</Text>
+          <TouchableOpacity
+            onPress={() => (onClose ? onClose() : router.back())}
+            style={styles.backBtn}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          >
+            <Feather name="arrow-left" size={20} color={COLORS.text} />
           </TouchableOpacity>
-          <View style={styles.searchContainer}>
-            <Text style={styles.searchIcon}>🔍</Text>
+          <View style={styles.searchBar}>
+            <Feather name="search" size={16} color={COLORS.subText} />
             <TextInput
               style={styles.searchInput}
               placeholder={strings.search}
               placeholderTextColor="#999"
               value={searchText}
               onChangeText={setSearchText}
+              autoCapitalize="none"
+              autoCorrect={false}
+              spellCheck={false}
             />
           </View>
-        </View>
-
-        {/* Sort Chips */}
-        <View style={styles.sortRow}>
-          <TouchableOpacity
-            style={[styles.filterIconBtn, hasActiveFilter && styles.filterIconBtnActive]}
-            onPress={() => {
-              setSelectedTags({ ...appliedTags });
-              setShowFilterModal(true);
-            }}
-          >
-            <Text style={styles.filterIconText}>☰</Text>
-            {hasActiveFilter && <View style={styles.filterDot} />}
+          <TouchableOpacity style={styles.heartBtn}>
+            <Feather name="heart" size={20} color={COLORS.text} />
           </TouchableOpacity>
-          {sorts.map((s) => (
-            <TouchableOpacity
-              key={s.key}
-              style={[styles.sortChip, activeSort === s.key && styles.sortChipActive]}
-              onPress={() => setActiveSort(s.key)}
-            >
-              <Text style={[styles.sortText, activeSort === s.key && styles.sortTextActive]}>
-                {s.label}
-              </Text>
-            </TouchableOpacity>
-          ))}
         </View>
+      </View>
+
+      {/* Filter chips — mirror MassageHomeScreen */}
+      <View style={styles.filterRow}>
+        <TouchableOpacity
+          style={[styles.filterIconChip, hasActiveFilter && styles.filterChipActive]}
+          onPress={() => {
+            setSelectedTags({ ...appliedTags });
+            setShowFilterModal(true);
+          }}
+        >
+          <Feather
+            name="sliders"
+            size={16}
+            color={hasActiveFilter ? '#fff' : COLORS.subText}
+          />
+        </TouchableOpacity>
+        {sorts.map((s) => (
+          <TouchableOpacity
+            key={s.key}
+            style={[styles.filterChip, activeSort === s.key && styles.filterChipActive]}
+            onPress={() => setActiveSort(s.key)}
+          >
+            <Text
+              style={[
+                styles.filterChipText,
+                activeSort === s.key && styles.filterChipActiveText,
+              ]}
+            >
+              {s.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
       </View>
 
       {/* Content */}
       {isLoading ? (
         <View style={styles.centerContainer}>
-          <ActivityIndicator size="small" color={COLORS.green} />
+          <ActivityIndicator size="large" color={COLORS.green} />
         </View>
       ) : filteredServices.length === 0 ? (
         <View style={styles.centerContainer}>
-          <Text style={styles.emptyEmoji}>🏢</Text>
+          <Feather name="map-pin" size={48} color={COLORS.subText} style={styles.emptyIcon} />
           <Text style={styles.emptyText}>{strings.noServices}</Text>
         </View>
       ) : (
@@ -371,7 +430,7 @@ export default function MassageLocationScreen({ onClose }: { onClose?: () => voi
 
               {FILTER_TAGS.map((tag) => (
                 <View key={tag} style={styles.tagRow}>
-                  <Text style={styles.tagRowLabel}>{tag}</Text>
+                  <Text style={styles.tagRowLabel}>{getFilterTagLabel(tag, isEn)}</Text>
                   <Switch
                     value={!!selectedTags[tag]}
                     onValueChange={(val: boolean) => setSelectedTags((prev) => ({ ...prev, [tag]: val }))}
@@ -1062,218 +1121,225 @@ const detailStyles = StyleSheet.create({
 });
 
 // ─── List Styles ────────────────────────────────────────────
+// Style mirror với MassageHomeScreen để 2 màn có cùng layout / bố cục:
+// background xám nhạt, header trắng bo dưới, filter chip pill nâu,
+// card avatar 96×96 + banner tag + nút Đặt bo tròn ngang dòng khoảng cách.
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: COLORS.white,
+    backgroundColor: COLORS.bg,
   },
   screenTop: {
-    paddingTop: 6,
-    paddingBottom: 8,
+    paddingBottom: 10,
     backgroundColor: COLORS.white,
+    borderBottomLeftRadius: 20,
+    borderBottomRightRadius: 20,
   },
 
-  // Header
+  // Header (back · search · heart)
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
+    paddingHorizontal: 12,
     paddingTop: 8,
     paddingBottom: 10,
-    gap: 10,
+    gap: 8,
   },
   backBtn: {
     width: 36,
     height: 36,
     borderRadius: 18,
+    backgroundColor: '#F0F0F0',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  backIcon: {
-    fontSize: 22,
-    color: COLORS.text,
-  },
-  searchContainer: {
+  searchBar: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: COLORS.bg,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-  },
-  searchIcon: {
-    fontSize: 16,
-    marginRight: 8,
-    opacity: 0.5,
+    backgroundColor: '#F0F0F0',
+    borderRadius: 20,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    gap: 6,
   },
   searchInput: {
     flex: 1,
-    paddingVertical: 10,
-    paddingHorizontal: 4,
-    fontSize: 14,
+    fontSize: 13,
     color: COLORS.text,
+    padding: 0,
+  },
+  heartBtn: {
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
-  // Sort Row
-  sortRow: {
+  // Filter chips
+  filterRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingBottom: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     gap: 8,
+    backgroundColor: COLORS.white,
   },
-  filterIconBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 10,
-    borderWidth: 1.5,
+  filterIconChip: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 1,
     borderColor: COLORS.border,
     alignItems: 'center',
     justifyContent: 'center',
-    position: 'relative',
+    backgroundColor: COLORS.white,
   },
-  filterIconBtnActive: {
-    borderColor: COLORS.green,
-  },
-  filterIconText: {
-    fontSize: 16,
-    color: COLORS.subText,
-  },
-  filterDot: {
-    position: 'absolute',
-    top: 4,
-    right: 4,
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: COLORS.red,
-  },
-  sortChip: {
-    paddingHorizontal: 16,
-    paddingVertical: 9,
+  filterChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 7,
     borderRadius: 20,
-    borderWidth: 1.5,
+    borderWidth: 1,
     borderColor: COLORS.border,
     backgroundColor: COLORS.white,
   },
-  sortChipActive: {
-    backgroundColor: COLORS.text,
-    borderColor: COLORS.text,
+  filterChipActive: {
+    backgroundColor: COLORS.green,
+    borderColor: COLORS.green,
   },
-  sortText: {
+  filterChipText: {
     fontSize: 13,
-    fontWeight: '600',
-    color: COLORS.subText,
+    fontWeight: '500',
+    color: COLORS.text,
   },
-  sortTextActive: {
-    color: COLORS.white,
+  filterChipActiveText: {
+    color: '#fff',
+    fontWeight: '600',
   },
 
   // List
   listContent: {
-    paddingHorizontal: 16,
+    paddingHorizontal: 12,
+    paddingTop: 10,
     paddingBottom: 30,
   },
 
-  // Service Card
+  // Card (mirror MassageHomeScreen)
   card: {
     flexDirection: 'row',
+    alignItems: 'center',
     backgroundColor: COLORS.white,
     borderRadius: 14,
-    padding: 12,
-    marginBottom: 14,
-    borderWidth: 1,
-    borderColor: '#EFEFEF',
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+    marginBottom: 12,
+    gap: 14,
+    minHeight: 112,
   },
-  cardImageWrap: {
-    width: 120,
-    height: 120,
-    borderRadius: 12,
-    overflow: 'hidden',
-    marginRight: 14,
-    backgroundColor: COLORS.bg,
-    position: 'relative',
-  },
-  cardImage: {
-    width: 120,
-    height: 120,
-  },
-  imageTag: {
-    position: 'absolute',
-    top: 8,
-    left: 0,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderTopRightRadius: 6,
-    borderBottomRightRadius: 6,
-  },
-  imageTagOrange: {
-    backgroundColor: '#E67E22',
-  },
-  imageTagGreen: {
-    backgroundColor: COLORS.green,
-  },
-  imageTagRed: {
-    backgroundColor: COLORS.red,
-  },
-  imageTagText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: COLORS.white,
-  },
-  cardBody: {
+  cardTouchArea: {
     flex: 1,
-    justifyContent: 'center',
-  },
-  serviceName: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: COLORS.text,
-    marginBottom: 8,
-    lineHeight: 21,
-  },
-  metaRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    marginBottom: 8,
+    gap: 14,
   },
-  starIcon: {
-    fontSize: 13,
+  avatarColumn: {
+    width: 96,
+    alignItems: 'center',
   },
-  ratingText: {
-    fontSize: 14,
+  avatarCircle: {
+    width: 96,
+    height: 96,
+    borderRadius: 12,
+    backgroundColor: '#EEE',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  avatarImage: {
+    width: '100%',
+    height: '100%',
+  },
+  // Banner tag overlay mép trên ảnh, clip theo bo góc của avatarCircle.
+  tagChipBelowOuter: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+  },
+  tagChipBelowPill: {
+    width: '100%',
+    paddingHorizontal: 4,
+    paddingVertical: 3,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tagChipBelowText: {
+    fontSize: 10,
     fontWeight: '700',
-    color: COLORS.gold,
+    letterSpacing: 0.1,
+    textAlign: 'center',
+    color: '#fff',
   },
-  metaSep: {
-    fontSize: 12,
-    color: COLORS.border,
-    marginHorizontal: 4,
+  cardInfo: {
+    flex: 1,
+    gap: 5,
+    justifyContent: 'center',
+    minHeight: 78,
   },
-  metaText: {
-    fontSize: 13,
-    color: COLORS.subText,
-  },
-  priceRow: {
+  cardRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
+  therapistName: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: COLORS.text,
+    flex: 1,
+  },
+  ratingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  },
+  ratingValue: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: COLORS.text,
+  },
+  reviewCount: {
+    fontSize: 13,
+    color: COLORS.subText,
+  },
+  distanceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  },
+  distanceText: {
+    fontSize: 13,
+    color: COLORS.subText,
+  },
   priceText: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '800',
     color: COLORS.green,
   },
-  bookBtn: {
+  bookButton: {
     backgroundColor: COLORS.green,
-    paddingHorizontal: 20,
-    paddingVertical: 8,
+    paddingHorizontal: 18,
+    paddingVertical: 9,
     borderRadius: 18,
+    minWidth: 64,
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'flex-end',
+    marginBottom: 2,
   },
-  bookBtnText: {
-    color: COLORS.white,
-    fontSize: 13,
+  bookButtonText: {
+    color: '#fff',
+    fontSize: 14,
     fontWeight: '700',
   },
 
@@ -1284,8 +1350,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 40,
   },
-  emptyEmoji: {
-    fontSize: 48,
+  emptyIcon: {
     marginBottom: 16,
   },
   emptyText: {

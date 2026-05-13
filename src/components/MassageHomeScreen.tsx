@@ -1,15 +1,15 @@
+import Feather from '@expo/vector-icons/Feather';
 import { ModalSafeAreaProvider } from '@/components/ModalSafeAreaProvider';
-import { SERVICE_TYPES, VIETNAM_PROVINCES } from '@/constants/bookingFilters';
+import { SERVICE_TYPES, getServiceTypeLabel } from '@/constants/bookingFilters';
 import { AppColors } from '@/constants/appColors';
 import {
   FILTER_THERAPIST_TAGS,
-  THERAPIST_TAG_QUALITY,
-  THERAPIST_TAG_UPDATED,
   THERAPIST_TAG_VISUAL,
   getTherapistDisplayTag,
-  isQualityTherapist,
-  isRecentlyJoinedTherapist,
+  getTherapistTagLabel,
+  matchesTherapistTag,
 } from '@/constants/therapistTags';
+import { useBookings } from '@/contexts/BookingsContext';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useReviewMode } from '@/contexts/ReviewModeContext';
 import { useUser } from '@/contexts/UserContext';
@@ -28,6 +28,7 @@ import {
 import { inferVietnamProvinceFromCoordinates } from '@/lib/vietnamProvinceFromGps';
 import { canUseAppFeatures } from '@/lib/session';
 import { getTherapists, therapistDisplayImageCandidates } from '@/lib/supabaseService';
+import { getMergedTherapistRating } from '@/lib/therapistRating';
 import type { Therapist } from '@/lib/types';
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
@@ -98,11 +99,11 @@ export default function MassageHomeScreen({
   const { user, setUser } = useUser();
   const { hideVipSubscription } = useReviewMode();
   const { language } = useLanguage();
+  const { getReviewsForTherapist } = useBookings();
   const tabletLayout = useTabletLayout();
   const insets = useSafeAreaInsets();
   const baseInsets = initialWindowMetrics?.insets;
   const safeTop = Math.max(insets.top, baseInsets?.top ?? 0);
-  const safeBottom = Math.max(insets.bottom, baseInsets?.bottom ?? 0);
   const safeLeft = Math.max(insets.left, baseInsets?.left ?? 0);
   const safeRight = Math.max(insets.right, baseInsets?.right ?? 0);
   const isVipMember = !!user?.isVipMember;
@@ -266,22 +267,15 @@ export default function MassageHomeScreen({
     setSelectedService(matched ?? initialService);
   }, [initialService]);
 
-  const resolveTherapistCity = useCallback(
-    (item: Therapist) => {
-      if (item.workingCity?.trim()) {
-        return item.workingCity.trim();
-      }
-      const hash = item.id.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0);
-      return VIETNAM_PROVINCES[hash % VIETNAM_PROVINCES.length];
-    },
-    [],
-  );
-
   const filteredTherapists = React.useMemo(() => {
     let list = [...therapists];
 
     if (selectedCity) {
-      list = list.filter((t) => resolveTherapistCity(t) === selectedCity);
+      const cityNorm = selectedCity.trim().toLowerCase();
+      list = list.filter((t) => {
+        const wc = t.workingCity?.trim().toLowerCase();
+        return wc ? wc === cityNorm : false;
+      });
     } else {
       list = [];
     }
@@ -291,15 +285,12 @@ export default function MassageHomeScreen({
       list = list.filter((t) => t.gender === appliedGender);
     }
 
-    // Tag filter — cùng rule với badge (therapistTags.ts)
+    // Tag filter — match đúng tag đang hiển thị trên card (xem therapistTags.ts:
+    // Chất lượng theo rating thực, Mới đến / Mới cập nhật theo rotation 24h).
     if (appliedTags.length > 0) {
-      list = list.filter((t) => {
-        return appliedTags.some((tag) => {
-          if (tag === THERAPIST_TAG_QUALITY) return isQualityTherapist(t);
-          if (tag === THERAPIST_TAG_UPDATED) return isRecentlyJoinedTherapist(t);
-          return false;
-        });
-      });
+      list = list.filter((t) =>
+        appliedTags.some((tag) => matchesTherapistTag(t, tag)),
+      );
     }
 
     // Status filter
@@ -358,7 +349,6 @@ export default function MassageHomeScreen({
     searchText,
     sortBy,
     isVipMember,
-    resolveTherapistCity,
   ]);
 
   const openFilterModal = () => {
@@ -403,11 +393,12 @@ export default function MassageHomeScreen({
     const displayUri = candidates[attempt] ?? '';
     const hasImageAvatar = attempt < candidates.length && !!displayUri;
     const isWorking = item.isAvailable;
+    const mergedRating = getMergedTherapistRating(item, getReviewsForTherapist(item.id));
 
     return (
       <View style={styles.card}>
         <TouchableOpacity style={styles.cardTouchArea} onPress={() => setSelectedTherapist(item)} activeOpacity={0.7}>
-          {/* Avatar + tag dưới ảnh (không đè mặt) */}
+          {/* Avatar (khung vuông bo góc nhẹ) + badge nho nhỏ overlay góc dưới ảnh */}
           <View style={styles.avatarColumn}>
             <View style={styles.avatarCircle}>
               {hasImageAvatar ? (
@@ -423,55 +414,51 @@ export default function MassageHomeScreen({
                   }}
                 />
               ) : (
-                <Text style={styles.avatarText}>
-                  {item.gender === 'female' ? '👩' : '👨'}
-                </Text>
+                <Feather name="user" size={48} color={COLORS.subText} />
               )}
-            </View>
-            {tag && tagVisual ? (
-              <View style={styles.tagChipBelowOuter} pointerEvents="none">
-                <View
-                  style={[
-                    styles.tagChipBelowPill,
-                    {
-                      backgroundColor: tagVisual.bg,
-                      borderColor: tagVisual.border,
-                    },
-                  ]}
-                >
-                  <Text
-                    style={[styles.tagChipBelowText, { color: tagVisual.text }]}
-                    numberOfLines={1}
-                    maxFontSizeMultiplier={1.15}
+              {tag && tagVisual ? (
+                <View style={styles.tagChipBelowOuter} pointerEvents="none">
+                  <View
+                    style={[
+                      styles.tagChipBelowPill,
+                      {
+                        backgroundColor: tagVisual.bg,
+                        borderColor: tagVisual.border,
+                      },
+                    ]}
                   >
-                    {tag}
-                  </Text>
+                    <Text
+                      style={[styles.tagChipBelowText, { color: tagVisual.text }]}
+                      numberOfLines={1}
+                      maxFontSizeMultiplier={1.15}
+                    >
+                      {getTherapistTagLabel(tag, isEn)}
+                    </Text>
+                  </View>
                 </View>
-              </View>
-            ) : null}
+              ) : null}
+            </View>
           </View>
 
           {/* Info */}
           <View style={styles.cardInfo}>
             <View style={styles.cardRow}>
               <Text style={styles.therapistName} numberOfLines={1}>{item.name}</Text>
-              <Text style={styles.earliestTime}>Sớm nhất 12:00</Text>
             </View>
             <View style={styles.ratingRow}>
-              <Text style={styles.starIcon}>⭐</Text>
-              <Text style={styles.ratingValue}>{item.rating.toFixed(1)}</Text>
-              <Text style={styles.reviewCount}>({item.reviewCount} {isEn ? 'reviews' : 'đánh giá'})</Text>
+              <Feather name="star" size={13} color={COLORS.gold} />
+              <Text style={styles.ratingValue}>{mergedRating.rating.toFixed(1)}</Text>
+              <Text style={styles.reviewCount}>
+                ({mergedRating.reviewCount} {isEn ? (mergedRating.reviewCount === 1 ? 'review' : 'reviews') : 'đánh giá'})
+              </Text>
             </View>
             {isVipMember ? (
               <Text style={styles.vipAgeText}>{isEn ? 'Age' : 'Tuổi'}: {estimateAge(item)}</Text>
             ) : null}
             <View style={styles.distanceRow}>
-              <Text style={styles.distanceIcon}>📍</Text>
+              <Feather name="map-pin" size={13} color={COLORS.subText} />
               <Text style={styles.distanceText}>{distanceText}</Text>
             </View>
-            <Text style={[styles.statusText, isWorking ? styles.statusTextAvailable : styles.statusTextRest]}>
-              {isWorking ? 'Sẵn sàng nhận lịch' : 'Nghỉ ngơi'}
-            </Text>
           </View>
         </TouchableOpacity>
 
@@ -480,7 +467,9 @@ export default function MassageHomeScreen({
           style={[styles.bookButton, !isWorking && styles.bookButtonDisabled]}
           onPress={() => setSelectedTherapist(item)}
         >
-          <Text style={styles.bookButtonText}>{isWorking ? 'Đặt' : 'Nghỉ'}</Text>
+          <Text style={styles.bookButtonText}>
+            {isWorking ? (isEn ? 'Book' : 'Đặt') : (isEn ? 'Resting' : 'Nghỉ')}
+          </Text>
         </TouchableOpacity>
       </View>
     );
@@ -492,7 +481,9 @@ export default function MassageHomeScreen({
         styles.container,
         {
           paddingTop: safeTop,
-          paddingBottom: safeBottom,
+          // Theo yêu cầu: riêng màn này bỏ qua safe area dưới để nội dung trải
+          // hết tới mép màn hình (các màn khác vẫn dùng safe area như cũ).
+          paddingBottom: 0,
           paddingLeft: safeLeft,
           paddingRight: safeRight,
         },
@@ -509,7 +500,7 @@ export default function MassageHomeScreen({
           hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
           pressRetentionOffset={{ top: 12, bottom: 12, left: 12, right: 12 }}
         >
-          <Text style={styles.backIcon}>←</Text>
+          <Feather name="arrow-left" size={20} color={COLORS.text} />
         </TouchableOpacity>
         <TouchableOpacity style={styles.locationBtn} onPress={openSelectRegion}>
           <Text style={styles.locationText} numberOfLines={1}>
@@ -522,13 +513,13 @@ export default function MassageHomeScreen({
                   ? 'Detecting…'
                   : 'Đang xác định…')}
           </Text>
-          <Text style={styles.locationArrow}>▾</Text>
+          <Feather name="chevron-down" size={16} color={COLORS.subText} />
         </TouchableOpacity>
         <View style={styles.searchBar}>
-          <Text style={styles.searchIcon}>🔍</Text>
+          <Feather name="search" size={16} color={COLORS.subText} />
           <TextInput
             style={styles.searchInput}
-            placeholder="Tìm kiếm..."
+            placeholder={isEn ? 'Search...' : 'Tìm kiếm...'}
             placeholderTextColor="#999"
             value={searchText}
             onChangeText={setSearchText}
@@ -538,17 +529,18 @@ export default function MassageHomeScreen({
           />
         </View>
         <TouchableOpacity style={styles.heartBtn}>
-          <Text style={styles.heartIcon}>♡</Text>
+          <Feather name="heart" size={20} color={COLORS.text} />
         </TouchableOpacity>
       </View>
 
       {/* VIP Banner */}
       {!isVipMember && !hideVipSubscription ? (
         <View style={[styles.vipBanner, { marginHorizontal: tabletLayout.horizontalPadding - 4 }]}>
-          <Text style={styles.vipCrown}>👑</Text>
+          <Feather name="award" size={18} color="#D97706" />
           <Text style={styles.vipText}>{isEn ? 'Enjoy exclusive benefits' : 'Tận hưởng những quyền lợi đặc biệt'}</Text>
           <TouchableOpacity style={styles.upgradeBtn}>
-            <Text style={styles.upgradeBtnText}>{isEn ? 'Upgrade →' : 'Nâng cấp →'}</Text>
+            <Text style={styles.upgradeBtnText}>{isEn ? 'Upgrade' : 'Nâng cấp'}</Text>
+            <Feather name="arrow-right" size={12} color="#fff" />
           </TouchableOpacity>
         </View>
       ) : null}
@@ -561,7 +553,11 @@ export default function MassageHomeScreen({
           style={[styles.filterIconChip, hasActiveFilters && styles.filterChipActive]}
           onPress={openFilterModal}
         >
-          <Text style={[styles.filterIconText, hasActiveFilters && styles.filterChipActiveText]}>⚙</Text>
+          <Feather
+            name="sliders"
+            size={16}
+            color={hasActiveFilters ? '#fff' : COLORS.subText}
+          />
         </TouchableOpacity>
 
         {/* Gần tôi / Đặt nhiều */}
@@ -570,7 +566,7 @@ export default function MassageHomeScreen({
           onPress={() => setSortBy(sortBy === 'nearby' ? null : 'nearby')}
         >
           <Text style={[styles.filterChipText, sortBy === 'nearby' && styles.filterChipActiveText]}>
-            Gần tôi
+            {isEn ? 'Nearby' : 'Gần tôi'}
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
@@ -578,18 +574,23 @@ export default function MassageHomeScreen({
           onPress={() => setSortBy(sortBy === 'popular' ? null : 'popular')}
         >
           <Text style={[styles.filterChipText, sortBy === 'popular' && styles.filterChipActiveText]}>
-            Đặt nhiều
+            {isEn ? 'Popular' : 'Đặt nhiều'}
           </Text>
         </TouchableOpacity>
 
-        {/* Service type chip */}
+        {/* Service type chip — VI vẫn là canonical key, EN chỉ phục vụ render. */}
         <TouchableOpacity
-          style={[styles.filterChip, selectedService !== 'Tất cả' && styles.filterChipActive]}
+          style={[styles.filterChip, styles.filterChipRow, selectedService !== 'Tất cả' && styles.filterChipActive]}
           onPress={() => setShowServiceModal(true)}
         >
           <Text style={[styles.filterChipText, selectedService !== 'Tất cả' && styles.filterChipActiveText]}>
-            {selectedService === 'Tất cả' ? 'Loại dịch vụ ▾' : selectedService}
+            {selectedService === 'Tất cả'
+              ? (isEn ? 'Service type' : 'Loại dịch vụ')
+              : getServiceTypeLabel(selectedService, isEn)}
           </Text>
+          {selectedService === 'Tất cả' ? (
+            <Feather name="chevron-down" size={14} color={COLORS.subText} />
+          ) : null}
         </TouchableOpacity>
       </View>
 
@@ -601,7 +602,7 @@ export default function MassageHomeScreen({
         </View>
       ) : !selectedCity ? (
         <View style={styles.centerContainer}>
-          <Text style={styles.emptyEmoji}>📍</Text>
+          <Feather name="map-pin" size={48} color={COLORS.subText} style={styles.emptyIcon} />
           <Text style={styles.emptyText}>
             {isEn
               ? 'Choose a province/city in the header to see therapists.'
@@ -610,7 +611,7 @@ export default function MassageHomeScreen({
         </View>
       ) : filteredTherapists.length === 0 ? (
         <View style={styles.centerContainer}>
-          <Text style={styles.emptyEmoji}>💆</Text>
+          <Feather name="users" size={48} color={COLORS.subText} style={styles.emptyIcon} />
           <Text style={styles.emptyText}>{isEn ? 'No matching therapists found' : 'Không có kỹ thuật viên nào phù hợp'}</Text>
         </View>
       ) : (
@@ -662,37 +663,37 @@ export default function MassageHomeScreen({
               {/* Tag */}
               <Text style={styles.sectionLabel}>{isEn ? 'Tags' : 'Tag'}</Text>
               <View style={styles.chipRow}>
-                {TAGS.map((tagOpt) => {
-                  const selected = filterTags.includes(tagOpt);
-                  const tv = THERAPIST_TAG_VISUAL[tagOpt];
-                  return (
-                    <TouchableOpacity
-                      key={tagOpt}
+              {TAGS.map((tagOpt) => {
+                const selected = filterTags.includes(tagOpt);
+                const tv = THERAPIST_TAG_VISUAL[tagOpt];
+                return (
+                  <TouchableOpacity
+                    key={tagOpt}
+                    style={[
+                      styles.radioChip,
+                      selected && tv
+                        ? {
+                            backgroundColor: tv.chipBg,
+                            borderColor: tv.chipBorder,
+                            borderWidth: 2,
+                          }
+                        : undefined,
+                      selected && !tv && styles.radioChipActive,
+                    ]}
+                    onPress={() => toggleTag(tagOpt)}
+                  >
+                    <Text
                       style={[
-                        styles.radioChip,
-                        selected && tv
-                          ? {
-                              backgroundColor: tv.chipBg,
-                              borderColor: tv.chipBorder,
-                              borderWidth: 2,
-                            }
-                          : undefined,
-                        selected && !tv && styles.radioChipActive,
+                        styles.radioChipText,
+                        selected && styles.radioChipActiveText,
+                        selected && tv && styles.tagFilterChipTextOn,
                       ]}
-                      onPress={() => toggleTag(tagOpt)}
                     >
-                      <Text
-                        style={[
-                          styles.radioChipText,
-                          selected && styles.radioChipActiveText,
-                          selected && tv && styles.tagFilterChipTextOn,
-                        ]}
-                      >
-                        {tagOpt}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
+                      {getTherapistTagLabel(tagOpt, isEn)}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
               </View>
 
               {/* Trạng thái */}
@@ -763,11 +764,11 @@ export default function MassageHomeScreen({
                     styles.serviceRowText,
                     selectedService === svc && styles.serviceRowTextActive,
                   ]}>
-                    {svc}
+                    {getServiceTypeLabel(svc, isEn)}
                   </Text>
                   {selectedService === svc && (
                     <View style={styles.serviceCheck}>
-                      <Text style={styles.serviceCheckIcon}>✓</Text>
+                      <Feather name="check" size={14} color="#fff" />
                     </View>
                   )}
                 </TouchableOpacity>
@@ -909,6 +910,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
   },
   upgradeBtnText: {
     fontSize: 12,
@@ -938,6 +942,11 @@ const styles = StyleSheet.create({
   filterIconText: {
     fontSize: 16,
     color: COLORS.subText,
+  },
+  filterChipRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
   },
   filterChip: {
     paddingHorizontal: 14,
@@ -987,17 +996,18 @@ const styles = StyleSheet.create({
     gap: 14,
   },
   avatarColumn: {
-    width: 88,
+    width: 96,
     alignItems: 'center',
   },
   avatarCircle: {
-    width: 80,
-    height: 80,
-    borderRadius: 14,
+    width: 96,
+    height: 96,
+    borderRadius: 12,
     backgroundColor: '#EEE',
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
+    position: 'relative',
   },
   avatarText: {
     fontSize: 38,
@@ -1006,23 +1016,28 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
   },
+  // Badge ("Mới cập nhật" / "Chất lượng") — dải banner ngang trải toàn bộ
+  // mép trên của khung ảnh, bị clip 2 góc trên theo borderRadius của
+  // avatarCircle nhờ overflow:'hidden' ở component cha.
   tagChipBelowOuter: {
-    marginTop: 6,
-    width: '100%',
-    alignItems: 'center',
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
   },
   tagChipBelowPill: {
-    paddingHorizontal: 7,
+    width: '100%',
+    paddingHorizontal: 4,
     paddingVertical: 3,
-    borderRadius: 10,
-    borderWidth: 1,
-    maxWidth: '100%',
-    alignSelf: 'center',
+    borderRadius: 0,
+    borderWidth: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   tagChipBelowText: {
-    fontSize: 9,
+    fontSize: 10,
     fontWeight: '700',
-    letterSpacing: 0.12,
+    letterSpacing: 0.1,
     textAlign: 'center',
   },
   tagFilterChipTextOn: {
@@ -1044,10 +1059,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: COLORS.text,
     flex: 1,
-  },
-  earliestTime: {
-    fontSize: 12,
-    color: COLORS.subText,
   },
   ratingRow: {
     flexDirection: 'row',
@@ -1083,32 +1094,25 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: COLORS.subText,
   },
-  statusText: {
-    marginTop: 3,
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  statusTextAvailable: {
-    color: AppColors.success,
-  },
-  statusTextRest: {
-    color: AppColors.danger,
-  },
   bookButton: {
     backgroundColor: COLORS.green,
-    paddingHorizontal: 20,
-    paddingVertical: 13,
-    borderRadius: 10,
-    minWidth: 56,
+    paddingHorizontal: 18,
+    paddingVertical: 9,
+    borderRadius: 18,
+    minWidth: 64,
     alignItems: 'center',
     justifyContent: 'center',
+    // alignSelf flex-end + marginBottom hạ nút xuống ngang dòng "khoảng cách"
+    // (dòng cuối của cardInfo) thay vì căn giữa theo chiều cao avatar.
+    alignSelf: 'flex-end',
+    marginBottom: 2,
   },
   bookButtonDisabled: {
     backgroundColor: '#A8A8A8',
   },
   bookButtonText: {
     color: '#fff',
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '700',
   },
 
@@ -1124,8 +1128,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: COLORS.subText,
   },
-  emptyEmoji: {
-    fontSize: 48,
+  emptyIcon: {
     marginBottom: 16,
   },
   emptyText: {

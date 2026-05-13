@@ -1,8 +1,9 @@
 import type { SharedBooking } from '@/contexts/BookingsContext';
 import { useLanguage } from '@/contexts/LanguageContext';
 import Feather from '@expo/vector-icons/Feather';
-import React from 'react';
+import React, { useState } from 'react';
 import {
+    ActivityIndicator,
     Modal,
     ScrollView,
     StyleSheet,
@@ -83,6 +84,7 @@ interface BookingDetailModalProps {
   onClose: () => void;
   onRebook?: (booking: SharedBooking) => void;
   onOpenChat?: (bookingId: string) => void;
+  onMarkComplete?: (booking: SharedBooking) => Promise<void>;
 }
 
 function StatusIllustration({ status }: { status: string }) {
@@ -156,9 +158,11 @@ export default function BookingDetailModal({
   onClose,
   onRebook,
   onOpenChat,
+  onMarkComplete,
 }: BookingDetailModalProps) {
   const { language } = useLanguage();
   const strings = translations[language as keyof typeof translations] || translations.vi;
+  const [marking, setMarking] = useState(false);
 
   if (!booking) return null;
 
@@ -321,6 +325,33 @@ export default function BookingDetailModal({
               <Feather name="message-circle" size={16} color="#fff" style={{ marginRight: 6 }} />
               <Text style={styles.rebookBtnText}>
                 {language === 'en' ? 'Chat with Therapist' : 'Chat với KTV'}
+              </Text>
+            </TouchableOpacity>
+          )}
+          {(booking.status === 'confirmed' || booking.status === 'in-progress') && onMarkComplete && (
+            <TouchableOpacity
+              style={[styles.rebookBtn, { backgroundColor: AppColors.accent }, marking && { opacity: 0.7 }]}
+              onPress={async () => {
+                if (marking) return;
+                setMarking(true);
+                try {
+                  await onMarkComplete(booking);
+                } finally {
+                  setMarking(false);
+                }
+              }}
+              activeOpacity={0.8}
+              disabled={marking}
+            >
+              {marking ? (
+                <ActivityIndicator size="small" color="#fff" style={{ marginRight: 8 }} />
+              ) : (
+                <Feather name="check-circle" size={16} color="#fff" style={{ marginRight: 6 }} />
+              )}
+              <Text style={styles.rebookBtnText}>
+                {marking
+                  ? (language === 'en' ? 'Processing...' : 'Đang xử lý...')
+                  : (language === 'en' ? 'Mark as complete' : 'Đánh dấu hoàn thành')}
               </Text>
             </TouchableOpacity>
           )}

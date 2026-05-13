@@ -13,7 +13,7 @@ import {
     Text,
     View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const translations = {
   vi: {
@@ -74,6 +74,11 @@ export default function NotificationScreen({
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'all' | 'booking' | 'promotion' | 'job'>('all');
   const isTherapist = user?.role === 'therapist';
+  const insets = useSafeAreaInsets();
+  // Modal renders in a separate window; on first frame ModalSafeAreaProvider may
+  // report bottom inset = 0, which lets the last list item slip behind the home
+  // indicator. Force a sensible floor so content is always fully visible.
+  const listBottomPadding = Math.max(insets.bottom, 16) + 24;
 
   useEffect(() => {
     const load = async () => {
@@ -218,10 +223,11 @@ export default function NotificationScreen({
         </View>
       ) : (
         <FlatList
+          style={styles.list}
           data={filteredNotifications}
           keyExtractor={(item) => item.id}
           renderItem={({ item }) => renderNotification(item)}
-          contentContainerStyle={styles.listContent}
+          contentContainerStyle={[styles.listContent, { paddingBottom: listBottomPadding }]}
           showsVerticalScrollIndicator={false}
         />
       )}
@@ -273,6 +279,9 @@ const styles = StyleSheet.create({
   },
 
   // List
+  list: {
+    flex: 1,
+  },
   listContent: {
     paddingBottom: 24,
   },
@@ -383,30 +392,35 @@ const styles = StyleSheet.create({
   },
   tabLabel: {
     fontSize: 13,
+    lineHeight: 18,
     fontWeight: '600',
     color: COLORS.subText,
+    includeFontPadding: false,
   },
   tabLabelActive: {
     color: '#FFFFFF',
   },
   tabBadge: {
-    minWidth: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: '#E0E0E0',
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#D7DBE0',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 5,
+    paddingHorizontal: 6,
   },
   tabBadgeActive: {
-    backgroundColor: 'rgba(255,255,255,0.3)',
+    backgroundColor: '#FFFFFF',
   },
   tabBadgeText: {
     fontSize: 11,
+    lineHeight: 14,
     fontWeight: '700',
-    color: COLORS.subText,
+    color: COLORS.text,
+    textAlign: 'center',
+    includeFontPadding: false,
   },
   tabBadgeTextActive: {
-    color: '#FFFFFF',
+    color: AppColors.primaryDark,
   },
 });

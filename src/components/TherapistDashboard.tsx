@@ -1,6 +1,7 @@
 import Feather from '@expo/vector-icons/Feather';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+    ActivityIndicator,
     Alert,
     Modal,
     Pressable,
@@ -15,6 +16,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import type { OnboardingLanguage } from '@/components/Onboarding';
+import ChatScreen from '@/components/ChatScreen';
+import { ModalSafeAreaProvider } from '@/components/ModalSafeAreaProvider';
 import { AppColors } from '@/constants/appColors';
 import { DEFAULT_CITY, SERVICE_TYPES, VIETNAM_PROVINCES } from '@/constants/bookingFilters';
 import { cityLooseMatch } from '@/lib/cityMatch';
@@ -24,12 +27,16 @@ import { useLanguage } from '@/contexts/LanguageContext';
 import { useUser } from '@/contexts/UserContext';
 import { useRouter } from 'expo-router';
 import {
+  checkTherapistHasActiveBooking,
   checkTherapistMinBalance,
+  getOrCreateChatRoom,
+  getSharedBookingRecordById,
   getTherapistAvailability,
   therapistApplyToBroadcastBooking,
   therapistPrimaryAcceptBooking,
   therapistPrimaryDeclineBooking,
   therapistSkipBroadcastBooking,
+  updateSharedBookingStatus,
   updateTherapistAvailability,
 } from '@/lib/supabaseService';
 
@@ -60,13 +67,17 @@ const translations: Record<OnboardingLanguage, Record<string, string>> = {
     newOrders: 'Đơn mới',
     costWalletBlockTitle: 'Chưa đủ điều kiện nhận đơn',
     costWalletBlockMsg:
-      'Phí kết nối không được âm. Nếu bạn đã từng nhận đơn, tổng số dư (thu nhập + phí) cần ≥ 200.000 đ. Vào Nạp tiền để bổ sung.',
+      'Số dư ví cần đạt tối thiểu 500.000 đ để nhận đơn mới. Vui lòng nạp tiền để bổ sung.',
     cannotAcceptCostTitle: 'Chưa thể nhận đơn',
     cannotAcceptCostMsg:
-      'Kiểm tra phí kết nối (≥ 0) và tổng số dư (≥ 200.000 đ khi đã có đơn). Nạp tiền tại mục Nạp tiền.',
+      'Số dư ví chưa đạt 500.000 đ. Vui lòng nạp tiền tại mục Nạp tiền.',
+    activeJobTitle: 'Đang có đơn hàng thực hiện',
+    activeJobMsg:
+      'Bạn đang có 1 đơn hàng chưa hoàn thành. Vui lòng hoàn thành đơn hàng hiện tại trước khi nhận đơn mới.',
     topupCta: 'Nạp tiền',
     accept: 'Chấp nhận',
     decline: 'Hủy',
+    chat: 'Chat với khách',
     skip: 'Bỏ qua',
     directedBadge: 'Khách chọn bạn',
     actionFailed: 'Thao tác không thành công',
@@ -97,13 +108,17 @@ const translations: Record<OnboardingLanguage, Record<string, string>> = {
     newOrders: 'New orders',
     costWalletBlockTitle: 'Not eligible to accept jobs',
     costWalletBlockMsg:
-      'Connection fee cannot be negative. After your first order, your total balance (earnings + fee) must be at least 200,000 VND. Use Top up.',
+      'Your deposit wallet must be at least 500,000 VND to accept new jobs. Please top up.',
+    activeJobTitle: 'Active booking in progress',
+    activeJobMsg:
+      'You already have an active booking. Please complete it before accepting a new one.',
     cannotAcceptCostTitle: 'Cannot accept job',
     cannotAcceptCostMsg:
-      'Check connection fee (≥ 0) and total balance (≥ 200,000 VND if you have orders). Top up in the app.',
+      'Your deposit wallet is below 500,000 VND. Please top up.',
     topupCta: 'Top up',
     accept: 'Accept',
     decline: 'Decline',
+    chat: 'Chat with client',
     skip: 'Skip',
     directedBadge: 'Client chose you',
     actionFailed: 'Action failed',
@@ -135,13 +150,17 @@ export default function TherapistDashboard() {
 
   const [isAvailable, setIsAvailable] = useState(true);
   const [togglingAvailability, setTogglingAvailability] = useState(false);
-  const [onlyCompleted, setOnlyCompleted] = useState(false);
   const [selectedCity, setSelectedCity] = useState(DEFAULT_CITY);
   const [selectedService, setSelectedService] = useState<string>(ALL_SERVICE);
   const [showCityModal, setShowCityModal] = useState(false);
   const [showServiceModal, setShowServiceModal] = useState(false);
   /** Điều kiện theo server: phí ≥ 0, và từng có đơn thì tổng số dư ≥ 200.000. */
   const [canReceiveByWallet, setCanReceiveByWallet] = useState(true);
+  const [chatBookingId, setChatBookingId] = useState<string | null>(null);
+  const [detailJob, setDetailJob] = useState<SharedBooking | null>(null);
+  const [markingComplete, setMarkingComplete] = useState(false);
+  const [movingInProgress, setMovingInProgress] = useState(false);
+  const [locallySkippedIds, setLocallySkippedIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (user?.authUid) {
@@ -220,7 +239,7 @@ export default function TherapistDashboard() {
     });
     return copy;
   }, [inboxBookings, user?.authUid]);
-  const allBookings = sortedInbox;
+  const allBookings = sortedInbox.filter((b) => !locallySkippedIds.has(b.id));
   const completedCount = myNamedBookings.filter((b) => b.status === 'completed').length;
   const currentRank = useMemo(() => {
     if (completedCount >= 51) return 'Bạch kim';
@@ -245,7 +264,9 @@ export default function TherapistDashboard() {
   const cityOptions = useMemo(() => [t.all, ...VIETNAM_PROVINCES], [t.all]);
 
   const visibleJobs = useMemo(() => {
-    const base = allBookings.filter((b) => b.status !== 'cancelled');
+    const base = allBookings.filter(
+      (b) => b.status === 'pending' || b.status === 'confirmed' || b.status === 'in-progress',
+    );
 
     const byCity =
       selectedCity === t.all
@@ -265,21 +286,31 @@ export default function TherapistDashboard() {
       ? byCity
       : byCity.filter((b) => (b.service || '').toLowerCase().includes(selectedService.toLowerCase()));
 
-    const filtered = onlyCompleted ? byService.filter((b) => b.status === 'completed') : byService;
-    return filtered.sort((a, b) => b.date.localeCompare(a.date));
-  }, [allBookings, onlyCompleted, selectedCity, selectedService, t.all]);
+    return byService.sort((a, b) => b.date.localeCompare(a.date));
+  }, [allBookings, selectedCity, selectedService, t.all]);
 
+  // Dự kiến thu nhập = tổng giá trị đơn hoàn thành trong tháng hiện tại (chỉ thống kê)
+  const currentMonth = new Date().toISOString().slice(0, 7); // 'YYYY-MM'
   const projectedIncome = useMemo(
-    () => visibleJobs.reduce((sum, b) => sum + Math.round(Number(b.price) || 0), 0),
-    [visibleJobs],
+    () => myNamedBookings
+      .filter((b) => b.status === 'completed' && b.date.startsWith(currentMonth))
+      .reduce((sum, b) => sum + Math.round(Number(b.price) || 0), 0),
+    [myNamedBookings, currentMonth],
   );
 
-  const ensureWalletOk = async (): Promise<boolean> => {
-    if (!user?.authUid) {
+  const ensureCanAcceptJob = async (): Promise<boolean> => {
+    if (!user?.authUid) return false;
+    // 1. KTV chỉ nhận 1 đơn tại 1 thời điểm
+    // Server là nguồn sự thật — có 48h filter tránh stale data
+    // Local (hasActiveBooking) không dùng làm gate vì có thể có booking cũ invisible trong context
+    const serverHasActive = await checkTherapistHasActiveBooking(user.authUid);
+    if (serverHasActive) {
+      Alert.alert(t.activeJobTitle, t.activeJobMsg);
       return false;
     }
+    // 2. Số dư ví phải >= 500.000 đ
     try {
-      const ok = await checkTherapistMinBalance(user.authUid, 0);
+      const ok = await checkTherapistMinBalance(user.authUid);
       if (!ok) {
         Alert.alert(t.cannotAcceptCostTitle, t.cannotAcceptCostMsg, [
           { text: language === 'vi' ? 'Để sau' : 'Later', style: 'cancel' },
@@ -295,7 +326,7 @@ export default function TherapistDashboard() {
 
   const applyToJob = async (item: SharedBooking) => {
     if (item.status !== 'pending') return;
-    if (!(await ensureWalletOk())) return;
+    if (!(await ensureCanAcceptJob())) return;
     if (item.assignmentFlow === 'nominated_city_broadcast' && user?.authUid) {
       const r = await therapistApplyToBroadcastBooking(
         item.id,
@@ -303,7 +334,14 @@ export default function TherapistDashboard() {
         displayName,
         user?.avatarUri,
       );
-      if (!r.ok) {
+      if (r.ok) {
+        Alert.alert(
+          language === 'vi' ? 'Đã ứng tuyển' : 'Applied',
+          language === 'vi'
+            ? 'Đơn ứng tuyển của bạn đã được ghi nhận. Khách hàng sẽ chọn KTV phù hợp.'
+            : 'Your application has been recorded. The customer will choose a therapist.',
+        );
+      } else {
         Alert.alert(t.actionFailed, r.reason ?? '');
       }
       await refreshBookings();
@@ -312,14 +350,43 @@ export default function TherapistDashboard() {
     updateStatus(item.id, 'confirmed');
   };
 
+  const openChat = async (item: SharedBooking) => {
+    if (!user?.authUid) return;
+    const row = await getSharedBookingRecordById(item.id).catch(() => null);
+    if (row) {
+      const customerId = String(row.customerUserId ?? '');
+      if (customerId) {
+        await getOrCreateChatRoom(
+          item.id, customerId, user.authUid,
+          String(row.customerName ?? ''), String(row.therapistName ?? ''),
+        ).catch(() => {});
+      }
+    }
+    setChatBookingId(item.id);
+  };
+
   const onPrimaryAccept = async (item: SharedBooking) => {
     if (!user?.authUid) return;
-    if (!(await ensureWalletOk())) return;
+    if (!(await ensureCanAcceptJob())) return;
     const r = await therapistPrimaryAcceptBooking(item.id, user.authUid);
     if (!r.ok) {
       Alert.alert(t.actionFailed, r.reason ?? '');
+      return;
     }
     await refreshBookings();
+    // Tạo chat room và mở chat ngay sau khi chấp nhận
+    const row = await getSharedBookingRecordById(item.id).catch(() => null);
+    if (row) {
+      const customerId = String(row.customerUserId ?? '');
+      const therapistId = user.authUid;
+      if (customerId && therapistId) {
+        await getOrCreateChatRoom(
+          item.id, customerId, therapistId,
+          String(row.customerName ?? ''), String(row.therapistName ?? ''),
+        ).catch(() => {});
+        setChatBookingId(item.id);
+      }
+    }
   };
 
   const onPrimaryDecline = async (item: SharedBooking) => {
@@ -333,33 +400,54 @@ export default function TherapistDashboard() {
 
   const onSkipJob = async (item: SharedBooking) => {
     if (!user?.authUid) return;
-    await therapistSkipBroadcastBooking(item.id, user.authUid);
+    setLocallySkippedIds((prev) => new Set(prev).add(item.id));
+    try {
+      await therapistSkipBroadcastBooking(item.id, user.authUid);
+    } catch { /* keep locally hidden */ }
     await refreshBookings();
   };
 
-  const renderTopTag = (item: SharedBooking) => {
-    if (item.status === 'completed') {
-      return (
-        <View style={s.topTagRow}>
-          <View style={[s.pillTag, { backgroundColor: C.complete }]}>
-            <Text style={[s.pillTagText, { color: '#FFFFFF' }]}>{t.expired}</Text>
-          </View>
-        </View>
-      );
+  const handleMarkComplete = async (item: SharedBooking) => {
+    setMarkingComplete(true);
+    try {
+      // Await DB write first — prevents refreshBookings() from racing and overwriting
+      // the local 'completed' state with stale DB data before the write commits.
+      await updateSharedBookingStatus(item.id, 'completed');
+      updateStatus(item.id, 'completed', {
+        userId: item.customerUserId,
+        therapistName: displayName,
+        service: item.service,
+      });
+      setDetailJob(null);
+      await refreshBookings();
+    } finally {
+      setMarkingComplete(false);
     }
-
-    return (
-      <View style={s.topTagRow}>
-        <View style={s.newTagInner}>
-          <Feather name="zap" size={14} color={C.accent} />
-          <Text style={s.newTagText}>{t.newJob}</Text>
-        </View>
-        <View style={[s.pillTag, { backgroundColor: C.urgent }]}>
-          <Text style={s.pillTagText}>{t.urgent}</Text>
-        </View>
-      </View>
-    );
   };
+
+  const handleMoveInProgress = async (item: SharedBooking) => {
+    setMovingInProgress(true);
+    try {
+      await updateSharedBookingStatus(item.id, 'in-progress');
+      updateStatus(item.id, 'in-progress');
+      setDetailJob((prev) => prev ? { ...prev, status: 'in-progress' } : prev);
+      await refreshBookings();
+    } finally {
+      setMovingInProgress(false);
+    }
+  };
+
+  const renderTopTag = () => (
+    <View style={s.topTagRow}>
+      <View style={s.newTagInner}>
+        <Feather name="zap" size={14} color={C.accent} />
+        <Text style={s.newTagText}>{t.newJob}</Text>
+      </View>
+      <View style={[s.pillTag, { backgroundColor: C.urgent }]}>
+        <Text style={s.pillTagText}>{t.urgent}</Text>
+      </View>
+    </View>
+  );
 
   const renderJobCard = (item: SharedBooking) => {
     const duration = getDurationMinutes(item.time);
@@ -371,27 +459,28 @@ export default function TherapistDashboard() {
       item.requestedTherapistId === uid &&
       (item.primaryAction === 'pending' || item.primaryAction == null) &&
       item.status === 'pending';
+    // Also show Skip/Apply for nominated KTV whose offer expired or was declined.
     const isBroadcastOther =
       item.assignmentFlow === 'nominated_city_broadcast' &&
       !!uid &&
-      !!item.requestedTherapistId &&
-      item.requestedTherapistId !== uid &&
-      item.status === 'pending';
+      item.status === 'pending' &&
+      !isDirected &&
+      (item.requestedTherapistId !== uid || (item.primaryAction !== 'pending' && item.primaryAction != null));
+    const isConfirmed = item.status === 'confirmed' || item.status === 'in-progress';
     const applyDisabled = item.status !== 'pending';
     const actionLabel = item.status === 'pending' ? t.apply : t.accepted;
 
-    return (
-      <View
-        key={item.id}
-        style={[s.jobCard, isDirected && { borderColor: C.accent, borderWidth: 2, backgroundColor: '#FFFBF8' }]}
-      >
+    const isAccepted = item.status === 'confirmed' || item.status === 'in-progress';
+    const cardStyle = [s.jobCard, isDirected && { borderColor: C.accent, borderWidth: 2, backgroundColor: '#FFFBF8' }];
+    const cardInner = (
+      <>
         {isDirected ? (
           <View style={s.directedPill}>
             <Feather name="star" size={14} color="#fff" />
             <Text style={s.directedPillText}>{t.directedBadge}</Text>
           </View>
         ) : null}
-        {item.status !== 'confirmed' && renderTopTag(item)}
+        {item.status === 'pending' && renderTopTag()}
         <Text style={s.jobCustomer}>{item.customerName}</Text>
         <Text style={s.jobAddress}>{item.address}</Text>
 
@@ -406,27 +495,34 @@ export default function TherapistDashboard() {
         </View>
 
         <View style={s.jobBottomRow}>
-          <View>
-            <Text style={s.earningLabel}>{t.earning}</Text>
-            <Text style={s.earningValue}>+{earned.toLocaleString('vi-VN')} đ</Text>
-          </View>
-          {isDirected ? (
+          <Text style={s.earningLabel}>{t.earning}</Text>
+          <Text style={s.earningValue}>+{earned.toLocaleString('vi-VN')} đ</Text>
+        </View>
+        <View style={s.jobBtnSection}>
+          {isConfirmed ? (
+            <TouchableOpacity
+              activeOpacity={0.9}
+              onPress={() => void openChat(item)}
+              style={s.chatButton}
+            >
+              <Feather name="message-circle" size={16} color="#fff" />
+              <Text style={s.chatButtonText}>{t.chat}</Text>
+            </TouchableOpacity>
+          ) : isDirected ? (
             <View style={s.dualBtnRow}>
               <TouchableOpacity
                 activeOpacity={0.9}
                 onPress={() => void onPrimaryDecline(item)}
-                style={[s.secondaryBtn, applyDisabled && s.applyButtonDisabled]}
-                disabled={applyDisabled}
+                style={s.secondaryBtn}
               >
                 <Text style={s.secondaryBtnText}>{t.decline}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 activeOpacity={0.9}
                 onPress={() => void onPrimaryAccept(item)}
-                style={[s.applyButton, { marginLeft: 8 }, applyDisabled && s.applyButtonDisabled]}
-                disabled={applyDisabled}
+                style={[s.applyButton, { flex: 1, marginLeft: 8 }]}
               >
-                <Text style={[s.applyButtonText, applyDisabled && s.applyButtonTextDisabled]}>{t.accept}</Text>
+                <Text style={s.applyButtonText}>{t.accept}</Text>
               </TouchableOpacity>
             </View>
           ) : isBroadcastOther ? (
@@ -439,9 +535,9 @@ export default function TherapistDashboard() {
                 <Text style={s.secondaryBtnText}>{t.skip}</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                activeOpacity={1}
+                activeOpacity={0.9}
                 onPress={() => void applyToJob(item)}
-                style={[s.applyButton, { marginLeft: 8 }, applyDisabled && s.applyButtonDisabled]}
+                style={[s.applyButton, { flex: 1, marginLeft: 8 }, applyDisabled && s.applyButtonDisabled]}
                 disabled={applyDisabled}
               >
                 <Text style={[s.applyButtonText, applyDisabled && s.applyButtonTextDisabled]}>{actionLabel}</Text>
@@ -449,15 +545,35 @@ export default function TherapistDashboard() {
             </View>
           ) : (
             <TouchableOpacity
-              activeOpacity={1}
+              activeOpacity={0.9}
               onPress={() => void applyToJob(item)}
-              style={[s.applyButton, applyDisabled && s.applyButtonDisabled]}
+              style={[s.applyButton, { alignSelf: 'flex-end' }, applyDisabled && s.applyButtonDisabled]}
               disabled={applyDisabled}
             >
               <Text style={[s.applyButtonText, applyDisabled && s.applyButtonTextDisabled]}>{actionLabel}</Text>
             </TouchableOpacity>
           )}
         </View>
+      </>
+    );
+
+    // Pending items: use View so inner buttons receive touches freely.
+    // Accepted items: wrap in TouchableOpacity to open detail sheet.
+    if (isAccepted) {
+      return (
+        <TouchableOpacity
+          key={item.id}
+          activeOpacity={0.85}
+          onPress={() => setDetailJob(item)}
+          style={cardStyle}
+        >
+          {cardInner}
+        </TouchableOpacity>
+      );
+    }
+    return (
+      <View key={item.id} style={cardStyle}>
+        {cardInner}
       </View>
     );
   };
@@ -492,25 +608,20 @@ export default function TherapistDashboard() {
 
           <View style={s.progressBar} />
 
-          <View style={s.completeRow}>
-            <Text style={s.completeLabel}>{t.doneJobs}</Text>
-            <Text style={s.completeValue}>{completedCount}</Text>
-          </View>
-
           <View style={s.statRow}>
             <View style={s.statCard}>
               <Text style={s.statTitle}>Đã hoàn thành</Text>
-              <Text style={s.statValue}>{completedCount}</Text>
+              <Text style={s.statValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>{completedCount}</Text>
               <Text style={s.statSub}>{completedCount}/0</Text>
             </View>
             <View style={s.statCard}>
               <Text style={s.statTitle}>{t.openJobs}</Text>
-              <Text style={s.statValue}>{openCount}</Text>
+              <Text style={s.statValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>{openCount}</Text>
               <Text style={s.statSub}>{t.waiting}</Text>
             </View>
             <View style={s.statCard}>
               <Text style={s.statTitle}>{t.estimate}</Text>
-              <Text style={s.statValue}>+{projectedIncome.toLocaleString('vi-VN')}</Text>
+              <Text style={s.statValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>+{projectedIncome.toLocaleString('vi-VN')}</Text>
               <Text style={s.statSub}>{t.estimateHint}</Text>
             </View>
           </View>
@@ -534,7 +645,6 @@ export default function TherapistDashboard() {
               onPress={() => {
                 setSelectedCity(DEFAULT_CITY);
                 setSelectedService(ALL_SERVICE);
-                setOnlyCompleted(false);
               }}
             >
               <Feather name="x" size={18} color="#9AA0A6" />
@@ -548,13 +658,6 @@ export default function TherapistDashboard() {
             <TouchableOpacity activeOpacity={1} style={s.filterChip} onPress={() => setShowServiceModal(true)}>
               <Text style={s.filterChipText}>{selectedService === ALL_SERVICE ? t.service : selectedService}</Text>
               <Feather name="chevron-down" size={14} color="#7B8086" />
-            </TouchableOpacity>
-            <TouchableOpacity
-              activeOpacity={1}
-              style={[s.filterChip, onlyCompleted && s.filterChipActive]}
-              onPress={() => setOnlyCompleted((prev) => !prev)}
-            >
-              <Text style={[s.filterChipText, onlyCompleted && s.filterChipTextActive]}>{t.doneFilter}</Text>
             </TouchableOpacity>
           </ScrollView>
         </View>
@@ -634,6 +737,130 @@ export default function TherapistDashboard() {
           </Pressable>
         </Pressable>
       </Modal>
+
+      {/* Job detail bottom sheet — chỉ mở cho đơn đã nhận (confirmed / in-progress) */}
+      <Modal
+        visible={detailJob !== null}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setDetailJob(null)}
+      >
+        <Pressable style={s.sheetOverlay} onPress={() => setDetailJob(null)}>
+          <Pressable style={s.sheetContainer} onPress={() => {}}>
+            <View style={s.sheetHandle} />
+            <Text style={s.sheetTitle}>
+              {language === 'vi' ? 'Chi tiết đơn hàng' : 'Order Detail'}
+            </Text>
+
+            {detailJob ? (
+              <>
+                {/* Booking info */}
+                <View style={s.sheetInfoBlock}>
+                  <View style={s.sheetInfoRow}>
+                    <Text style={s.sheetInfoLabel}>{language === 'vi' ? 'Dịch vụ' : 'Service'}:</Text>
+                    <Text style={s.sheetInfoValue} numberOfLines={2}>{detailJob.service}</Text>
+                  </View>
+                  <View style={s.sheetInfoRow}>
+                    <Text style={s.sheetInfoLabel}>{language === 'vi' ? 'Khách hàng' : 'Customer'}:</Text>
+                    <Text style={s.sheetInfoValue}>{detailJob.customerName}</Text>
+                  </View>
+                  {detailJob.customerPhone ? (
+                    <View style={s.sheetInfoRow}>
+                      <Text style={s.sheetInfoLabel}>SĐT:</Text>
+                      <Text style={s.sheetInfoValue}>{detailJob.customerPhone}</Text>
+                    </View>
+                  ) : null}
+                  <View style={s.sheetInfoRow}>
+                    <Text style={s.sheetInfoLabel}>{language === 'vi' ? 'Thời gian' : 'Time'}:</Text>
+                    <Text style={s.sheetInfoValue}>{detailJob.date} · {detailJob.time}</Text>
+                  </View>
+                  <View style={s.sheetInfoRow}>
+                    <Text style={s.sheetInfoLabel}>{language === 'vi' ? 'Địa chỉ' : 'Address'}:</Text>
+                    <Text style={s.sheetInfoValue} numberOfLines={2}>{detailJob.address}</Text>
+                  </View>
+                  <Text style={s.sheetPrice}>
+                    {language === 'vi' ? 'Giá' : 'Price'}: {(detailJob.price ?? 0).toLocaleString('vi-VN')} đ
+                  </Text>
+                </View>
+
+                {/* Status stepper */}
+                <View style={s.stepperWrap}>
+                  {[
+                    { key: 'confirmed', label: language === 'vi' ? 'Đã nhận đơn' : 'Accepted' },
+                    { key: 'in-progress', label: language === 'vi' ? 'Đang xử lý' : 'In Progress' },
+                    { key: 'completed', label: language === 'vi' ? 'Hoàn thành' : 'Completed' },
+                  ].map(({ key, label }) => {
+                    const stepOrder: Record<string, number> = { confirmed: 0, 'in-progress': 1, completed: 2 };
+                    const current = stepOrder[detailJob.status] ?? 0;
+                    const mine = stepOrder[key] ?? 0;
+                    const active = mine <= current;
+                    return (
+                      <View key={key} style={s.stepRow}>
+                        <View style={[s.stepDot, active && s.stepDotActive]} />
+                        <Text style={[s.stepLabel, active && s.stepLabelActive]}>{label}</Text>
+                      </View>
+                    );
+                  })}
+                </View>
+
+                {/* Action buttons */}
+                <View style={s.sheetActions}>
+                  {detailJob.status === 'confirmed' ? (
+                    <TouchableOpacity
+                      style={[s.sheetSecBtn, movingInProgress && { opacity: 0.6 }]}
+                      onPress={() => void handleMoveInProgress(detailJob)}
+                      disabled={movingInProgress}
+                      activeOpacity={0.85}
+                    >
+                      {movingInProgress
+                        ? <ActivityIndicator size="small" color={C.accent} />
+                        : <Text style={s.sheetSecBtnText}>
+                            {language === 'vi' ? 'Chuyển đang xử lý' : 'Move to In Progress'}
+                          </Text>
+                      }
+                    </TouchableOpacity>
+                  ) : null}
+                  <TouchableOpacity
+                    style={[s.sheetPriBtn, (markingComplete || movingInProgress) && { opacity: 0.6 }]}
+                    onPress={() => void handleMarkComplete(detailJob)}
+                    disabled={markingComplete || movingInProgress}
+                    activeOpacity={0.85}
+                  >
+                    {markingComplete ? (
+                      <>
+                        <ActivityIndicator size="small" color="#fff" style={{ marginRight: 8 }} />
+                        <Text style={s.sheetPriBtnText}>
+                          {language === 'vi' ? 'Đang xử lý...' : 'Processing...'}
+                        </Text>
+                      </>
+                    ) : (
+                      <Text style={s.sheetPriBtnText}>
+                        {language === 'vi' ? 'Đánh dấu hoàn thành' : 'Mark as Complete'}
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </>
+            ) : null}
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Chat screen modal — mở sau khi KTV chấp nhận đơn từ danh sách */}
+      <Modal
+        visible={chatBookingId !== null}
+        animationType="slide"
+        onRequestClose={() => setChatBookingId(null)}
+      >
+        <ModalSafeAreaProvider>
+          {chatBookingId && (
+            <ChatScreen
+              onClose={() => setChatBookingId(null)}
+              bookingId={chatBookingId}
+            />
+          )}
+        </ModalSafeAreaProvider>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -672,18 +899,10 @@ const s = StyleSheet.create({
   switchRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   switchLabel: { color: C.text, fontSize: 14, fontWeight: '700' },
   progressBar: { height: 6, borderRadius: 999, backgroundColor: C.accent, marginTop: 10 },
-  completeRow: {
-    marginTop: 8,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  completeLabel: { color: C.text, fontSize: 13, fontWeight: '600' },
-  completeValue: { color: C.text, fontSize: 13, fontWeight: '700' },
-  statRow: { marginTop: 10, flexDirection: 'row', gap: 10 },
+  statRow: { marginTop: 12, flexDirection: 'row', gap: 10 },
   statCard: { flex: 1 },
   statTitle: { color: C.text, fontSize: 12, fontWeight: '600' },
-  statValue: { color: C.text, fontSize: 30, lineHeight: 34, fontWeight: '500', marginTop: 2 },
+  statValue: { color: C.text, fontSize: 22, lineHeight: 26, fontWeight: '500', marginTop: 2 },
   statSub: { color: '#666666', fontSize: 12, marginTop: 2, fontWeight: '600' },
 
   costWalletBanner: {
@@ -786,7 +1005,7 @@ const s = StyleSheet.create({
     marginBottom: 8,
   },
   directedPillText: { color: '#fff', fontSize: 12, fontWeight: '800' },
-  dualBtnRow: { flexDirection: 'row', alignItems: 'center' },
+  dualBtnRow: { flexDirection: 'row', alignItems: 'center', width: '100%' },
   secondaryBtn: {
     minWidth: 100,
     borderRadius: 999,
@@ -816,15 +1035,28 @@ const s = StyleSheet.create({
   jobService: { color: C.text, fontSize: 19, fontWeight: '700' },
   durationRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   jobDuration: { color: '#91979E', fontSize: 13 },
-  jobBottomRow: { marginTop: 10, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' },
+  jobBottomRow: { marginTop: 10 },
+  jobBtnSection: { marginTop: 12 },
   earningLabel: { color: '#666666', fontSize: 12, marginBottom: 4 },
   earningValue: { color: C.text, fontSize: 29, lineHeight: 33, fontWeight: '500' },
+  chatButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    borderRadius: 999,
+    backgroundColor: C.accent,
+    paddingVertical: 11,
+    paddingHorizontal: 20,
+    width: '100%',
+  },
+  chatButtonText: { color: '#fff', fontSize: 15, fontWeight: '700' },
   applyButton: {
-    minWidth: 170,
     borderRadius: 999,
     backgroundColor: C.accent,
     alignItems: 'center',
     paddingVertical: 11,
+    paddingHorizontal: 14,
   },
   applyButtonDisabled: { backgroundColor: AppColors.primarySoft },
   applyButtonText: { color: '#FFFFFF', fontSize: 15, fontWeight: '700' },
@@ -867,4 +1099,119 @@ const s = StyleSheet.create({
   },
   modalRowText: { color: '#28303A', fontSize: 15, flex: 1, paddingRight: 12 },
   modalRowTextActive: { color: C.text, fontWeight: '700' },
+
+  // Job detail bottom sheet
+  sheetOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'flex-end',
+  },
+  sheetContainer: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 32,
+  },
+  sheetHandle: {
+    width: 40,
+    height: 4,
+    borderRadius: 999,
+    backgroundColor: '#E0D5D0',
+    alignSelf: 'center',
+    marginBottom: 16,
+  },
+  sheetTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: C.text,
+    marginBottom: 16,
+  },
+  sheetInfoBlock: {
+    marginBottom: 18,
+  },
+  sheetInfoRow: {
+    flexDirection: 'row',
+    gap: 6,
+    marginBottom: 7,
+    alignItems: 'flex-start',
+  },
+  sheetInfoLabel: {
+    fontSize: 14,
+    color: C.sub,
+    minWidth: 80,
+  },
+  sheetInfoValue: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: C.text,
+    flex: 1,
+  },
+  sheetPrice: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#C0392B',
+    marginTop: 4,
+  },
+  stepperWrap: {
+    marginBottom: 20,
+    gap: 10,
+  },
+  stepRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  stepDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#D0C8C0',
+  },
+  stepDotActive: {
+    backgroundColor: C.accent,
+  },
+  stepLabel: {
+    fontSize: 14,
+    color: '#A0A0A0',
+  },
+  stepLabelActive: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: C.text,
+  },
+  sheetActions: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  sheetSecBtn: {
+    flex: 1,
+    borderWidth: 1.5,
+    borderColor: C.accent,
+    borderRadius: 999,
+    paddingVertical: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#fff',
+  },
+  sheetSecBtnText: {
+    color: C.accent,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  sheetPriBtn: {
+    flex: 1,
+    borderRadius: 999,
+    paddingVertical: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    backgroundColor: C.accent,
+  },
+  sheetPriBtnText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '700',
+  },
 });

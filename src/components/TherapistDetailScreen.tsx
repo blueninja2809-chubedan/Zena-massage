@@ -1,10 +1,15 @@
 import { useBookings } from '@/contexts/BookingsContext';
+import { useLanguage } from '@/contexts/LanguageContext';
 import {
   getGeneratedReviewItemCount,
   isVirtualTherapistId,
   VIRTUAL_REVIEW_TEMPLATES,
 } from '@/lib/virtualTherapistsMock';
-import { getTherapistDisplayTag, THERAPIST_TAG_VISUAL } from '@/constants/therapistTags';
+import {
+  getTherapistDisplayTag,
+  getTherapistTagLabel,
+  THERAPIST_TAG_VISUAL,
+} from '@/constants/therapistTags';
 import { isRenderableTherapistImageUri } from '@/lib/supabaseService';
 import type { Therapist } from '@/lib/types';
 import React, { useEffect, useRef, useState } from 'react';
@@ -41,15 +46,54 @@ function getTherapistPhotos(therapist: Therapist): string[] {
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
-function formatDistanceLabel(distanceKm: number): string {
+function formatDistanceLabel(distanceKm: number, isEn: boolean = false): string {
   if (!Number.isFinite(distanceKm) || distanceKm <= 0) {
-    return 'Đang cập nhật';
+    return isEn ? 'Updating' : 'Đang cập nhật';
   }
   if (distanceKm < 1) {
     return `${Math.max(1, Math.round(distanceKm * 1000))}m`;
   }
   return `${Math.round(distanceKm * 10) / 10} km`;
 }
+
+const DETAIL_T = {
+  vi: {
+    services: 'Dịch vụ của tôi',
+    book: 'Đặt',
+    bookNow: 'Đặt ngay',
+    reviewsTitle: 'Đánh giá',
+    viewAll: 'Xem tất cả',
+    reviewCount: 'đánh giá',
+    minutes: 'phút',
+    currency: 'đ',
+    noContent: 'Chưa có nội dung',
+    noPhoto: 'Chưa có ảnh',
+    careNoTip: 'Không mất tiền tip, không phí di chuyển',
+    careRefund: 'Bồi thường nếu không đúng người',
+    showingOriginal: 'Đang hiển thị bản gốc',
+    translate: 'Dịch',
+    totalPrefix: 'Tổng:',
+    totalSuffix: 'dịch vụ',
+  },
+  en: {
+    services: 'My services',
+    book: 'Book',
+    bookNow: 'Book now',
+    reviewsTitle: 'Reviews',
+    viewAll: 'View all',
+    reviewCount: 'reviews',
+    minutes: 'min',
+    currency: 'đ',
+    noContent: 'No content',
+    noPhoto: 'No photos yet',
+    careNoTip: 'No tipping, no travel fees',
+    careRefund: 'Refund if therapist mismatched',
+    showingOriginal: 'Showing original',
+    translate: 'Translate',
+    totalPrefix: 'Total:',
+    totalSuffix: 'services',
+  },
+} as const;
 
 const COLORS = {
   green: AppColors.primaryDark,
@@ -174,6 +218,9 @@ export default function TherapistDetailScreen({
   resumeOpenBookingToken?: string;
 }) {
   const insets = useSafeAreaInsets();
+  const { language } = useLanguage();
+  const isEn = language === 'en';
+  const t = DETAIL_T[isEn ? 'en' : 'vi'];
   const { getReviewsForTherapist } = useBookings();
   const services = generateServicesForTherapist(therapist);
   const generatedReviews = generateReviews(therapist);
@@ -190,7 +237,7 @@ export default function TherapistDetailScreen({
       avatar: '👤',
       rating: r.rating,
       date: `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')} ${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`,
-      comment: r.comment || 'Chưa có nội dung',
+      comment: r.comment || t.noContent,
       hasTranslate: false,
     };
   });
@@ -251,7 +298,7 @@ export default function TherapistDetailScreen({
     .filter((svc) => selectedServices.has(svc.name))
     .reduce((sum, svc) => sum + svc.price, 0);
 
-  const distanceText = formatDistanceLabel(therapist.distanceFromCenter);
+  const distanceText = formatDistanceLabel(therapist.distanceFromCenter, isEn);
 
   // Rating breakdown (include real reviews)
   const totalReviewCount = therapist.reviewCount + realReviews.length;
@@ -354,7 +401,9 @@ export default function TherapistDetailScreen({
                   },
                 ]}
               >
-                <Text style={[styles.heroTagPillText, { color: tagVisual.text }]}>{tag}</Text>
+                <Text style={[styles.heroTagPillText, { color: tagVisual.text }]}>
+                  {getTherapistTagLabel(tag, isEn)}
+                </Text>
               </View>
             )}
             <View style={{ flex: 1 }} />
@@ -377,7 +426,7 @@ export default function TherapistDetailScreen({
             <Text style={styles.metaDivider}> | </Text>
             <Text style={styles.starIcon}>⭐</Text>
             <Text style={styles.ratingValue}>{combinedRating.toFixed(1)}</Text>
-            <Text style={styles.reviewLink}>({totalReviewCount} đánh giá)</Text>
+            <Text style={styles.reviewLink}>({totalReviewCount} {t.reviewCount})</Text>
           </View>
         </View>
 
@@ -394,11 +443,11 @@ export default function TherapistDetailScreen({
           <View style={styles.zenaCareRight}>
             <View style={styles.zenaCareRow}>
               <Text style={styles.zenaCareCheck}>☑️</Text>
-              <Text style={styles.zenaCareText}>Không mất tiền tip, không phí di chuyển</Text>
+              <Text style={styles.zenaCareText}>{t.careNoTip}</Text>
             </View>
             <View style={styles.zenaCareRow}>
               <Text style={styles.zenaCareCheck}>☑️</Text>
-              <Text style={styles.zenaCareText}>Bồi thường nếu không đúng người</Text>
+              <Text style={styles.zenaCareText}>{t.careRefund}</Text>
             </View>
           </View>
         </View>
@@ -410,7 +459,7 @@ export default function TherapistDetailScreen({
 
         {/* ===== Services ===== */}
         <View style={styles.servicesSection}>
-          <Text style={styles.sectionTitle}>Dịch vụ của tôi</Text>
+          <Text style={styles.sectionTitle}>{t.services}</Text>
           {services.map((svc) => {
             const selDuration = selectedDurations[svc.name] ?? svc.durations[0];
             const isSelected = selectedServices.has(svc.name);
@@ -441,7 +490,7 @@ export default function TherapistDetailScreen({
                           selDuration === d && styles.durationChipTextActive,
                         ]}
                       >
-                        {d} phút
+                        {d} {t.minutes}
                       </Text>
                     </TouchableOpacity>
                   ))}
@@ -462,7 +511,7 @@ export default function TherapistDetailScreen({
                       style={styles.bookBtnSmall}
                       onPress={() => toggleService(svc.name)}
                     >
-                      <Text style={styles.bookBtnSmallText}>Đặt</Text>
+                      <Text style={styles.bookBtnSmallText}>{t.book}</Text>
                     </TouchableOpacity>
                   )}
                 </View>
@@ -474,9 +523,9 @@ export default function TherapistDetailScreen({
         {/* ===== Reviews ===== */}
         <View style={styles.reviewsSection}>
           <View style={styles.reviewsHeader}>
-            <Text style={styles.sectionTitle}>Đánh giá</Text>
+            <Text style={styles.sectionTitle}>{t.reviewsTitle}</Text>
             <TouchableOpacity>
-              <Text style={styles.viewAllLink}>Xem tất cả</Text>
+              <Text style={styles.viewAllLink}>{t.viewAll}</Text>
             </TouchableOpacity>
           </View>
 
@@ -488,7 +537,7 @@ export default function TherapistDetailScreen({
               </Text>
               <StarDisplay rating={Math.round(combinedRating)} size={16} />
               <Text style={styles.ratingTotal}>
-                ({totalReviewCount} đánh giá)
+                ({totalReviewCount} {t.reviewCount})
               </Text>
             </View>
             <View style={styles.ratingBars}>
@@ -530,8 +579,8 @@ export default function TherapistDetailScreen({
               {review.hasTranslate && (
                 <View style={styles.translateRow}>
                   <Text style={styles.translateIcon}>🔄</Text>
-                  <Text style={styles.translateLabel}>Đang hiển thị bản gốc </Text>
-                  <Text style={styles.translateLink}>Dịch</Text>
+                  <Text style={styles.translateLabel}>{t.showingOriginal} </Text>
+                  <Text style={styles.translateLink}>{t.translate}</Text>
                 </View>
               )}
             </View>
@@ -546,14 +595,14 @@ export default function TherapistDetailScreen({
         <View style={styles.bottomBar}>
           <View style={styles.bottomInfo}>
             <Text style={styles.bottomLabel}>
-              Tổng: <Text style={styles.bottomCount}>{selectedServices.size}</Text> dịch vụ
+              {t.totalPrefix} <Text style={styles.bottomCount}>{selectedServices.size}</Text> {t.totalSuffix}
             </Text>
             <Text style={styles.bottomPrice}>
               {totalPrice.toLocaleString('vi-VN')} đ
             </Text>
           </View>
           <TouchableOpacity style={styles.bottomBookBtn} activeOpacity={0.8} onPress={() => setShowBooking(true)}>
-            <Text style={styles.bottomBookBtnText}>Đặt ngay</Text>
+            <Text style={styles.bottomBookBtnText}>{t.bookNow}</Text>
           </TouchableOpacity>
         </View>
       )}
@@ -599,7 +648,7 @@ export default function TherapistDetailScreen({
               <Text style={styles.photoViewerEmoji}>
                 {therapist.gender === 'female' ? '👩' : '👨'}
               </Text>
-              <Text style={styles.photoViewerNoPhoto}>Chưa có ảnh</Text>
+              <Text style={styles.photoViewerNoPhoto}>{t.noPhoto}</Text>
             </View>
           )}
           {hasPhotos && photos.length > 1 && (
@@ -632,6 +681,7 @@ export default function TherapistDetailScreen({
               }))}
             totalPrice={totalPrice}
             onClose={() => setShowBooking(false)}
+            onChatClose={() => { setShowBooking(false); onClose(); }}
           />
         </View>
       </Modal>

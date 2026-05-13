@@ -17,6 +17,7 @@ import {
 } from '@/lib/supabaseService';
 import { useUser } from '@/contexts/UserContext';
 import { cityLooseMatch } from '@/lib/cityMatch';
+import { supabase } from '@/lib/supabase';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 export type BookingStatus = 'pending' | 'confirmed' | 'in-progress' | 'completed' | 'cancelled';
@@ -233,13 +234,17 @@ export function BookingsProvider({ children }: { children: React.ReactNode }) {
         .map(toSharedBooking)
         .filter((item): item is SharedBooking => item !== null)
         .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      console.log('[BookingsCtx] refreshData: total bookings=', nextBookings.length,
+        'pending broadcast=', nextBookings.filter(b => b.assignmentFlow === 'nominated_city_broadcast' && b.status === 'pending').map(b => ({ id: b.id, jobCity: b.jobCity, status: b.status }))
+      );
       const nextReviews = reviewRows
         .map(toUserReview)
         .filter((item): item is UserReview => item !== null)
         .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
       setBookings(nextBookings);
       setReviews(nextReviews);
-    } catch {
+    } catch (e) {
+      console.warn('[BookingsCtx] refreshData error:', e);
       setBookings([]);
       setReviews([]);
     }
@@ -278,6 +283,20 @@ export function BookingsProvider({ children }: { children: React.ReactNode }) {
       void refreshData();
     }, 10000);
     return () => clearInterval(intervalId);
+  }, [refreshData]);
+
+  // Realtime: refresh immediately when any booking is inserted or updated.
+  useEffect(() => {
+    const channel = supabase
+      .channel('bookings-realtime')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'bookings' }, () => {
+        void refreshData();
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'bookings' }, () => {
+        void refreshData();
+      })
+      .subscribe();
+    return () => { void supabase.removeChannel(channel); };
   }, [refreshData]);
 
   // Load cancelled-bookings (bảng riêng) — refresh khi user đổi & chu kỳ.
@@ -348,6 +367,12 @@ export function BookingsProvider({ children }: { children: React.ReactNode }) {
     if (status === 'completed' && payout) {
       completeTherapistBookingPayouts(payout.therapistId, bookingId, payout.price)
         .catch((err) => console.warn('[completeTherapistBookingPayouts] Failed:', err));
+    }
+
+    // Đơn đóng (completed/cancelled) → xóa luôn chat ở phía server.
+    // Trigger DB (migration 063) cũng sẽ xóa; gọi thêm ở client để chat
+    // biến mất tức thì cho user vừa thao tác.
+    if (status === 'completed' || status === 'cancelled') {
       deleteChatRoomByBooking(bookingId).catch(() => {});
     }
 
@@ -413,6 +438,7 @@ export function BookingsProvider({ children }: { children: React.ReactNode }) {
     (opts: { displayName: string; therapistUid: string; workingCity: string }) => {
       const { displayName, therapistUid, workingCity } = opts;
       const city = workingCity?.trim() || '';
+      console.log('[JobInbox] filter params: displayName=', displayName, 'therapistUid=', therapistUid, 'city=', city, 'total bookings=', bookings.length);
       return bookings.filter((b) => {
         if (b.status === 'cancelled') {
           return false;

@@ -48,9 +48,13 @@ const translations = {
     noBookingsCompletedDesc: 'Các đơn massage đã hoàn tất sẽ xuất hiện tại đây.',
     noBookingsCancelled: 'Chưa có đơn đã huỷ',
     noBookingsCancelledDesc: 'Các đơn đã huỷ trước đây sẽ xuất hiện tại đây.',
+    noBookingsActive: 'Không có đơn đang chờ',
+    noBookingsActiveDesc: 'Các đơn đang chờ xác nhận hoặc đang thực hiện sẽ xuất hiện tại đây.',
     explore: 'Khám phá dịch vụ',
+    active: 'Đang xử lý',
     completed: 'Đã hoàn thành',
     cancelled: 'Đã huỷ',
+    chat: 'Chat',
     reschedule: 'Đặt lại',
     review: 'Đánh giá',
     previousPage: 'Trang trước',
@@ -67,9 +71,13 @@ const translations = {
     noBookingsCompletedDesc: 'Completed massage bookings will appear here.',
     noBookingsCancelled: 'No cancelled bookings',
     noBookingsCancelledDesc: 'Previously cancelled bookings will appear here.',
+    noBookingsActive: 'No active bookings',
+    noBookingsActiveDesc: 'Bookings awaiting confirmation or in progress will appear here.',
     explore: 'Explore services',
+    active: 'Active',
     completed: 'Completed',
     cancelled: 'Cancelled',
+    chat: 'Chat',
     reschedule: 'Rebook',
     review: 'Review',
     previousPage: 'Previous',
@@ -79,7 +87,7 @@ const translations = {
   },
 };
 
-type ActivityFilter = 'completed' | 'cancelled';
+type ActivityFilter = 'active' | 'completed' | 'cancelled';
 const ACTIVITY_PAGE_SIZE = 10;
 const ACTIVITY_MAX_RECENT = 50;
 
@@ -182,20 +190,42 @@ export default function ActivityScreen() {
     });
   }, [bookings, user]);
 
+  /** Tab "Đang xử lý" — đơn pending / confirmed / in-progress của customer hiện tại. */
+  const activeBookings = useMemo(() => {
+    if (!user) return [] as SharedBooking[];
+    const authUid = user.authUid || '';
+    const phone = user.phoneNumber || '';
+    const email = user.email || '';
+    const displayName = user.displayName || '';
+    return bookings
+      .filter((b) => {
+        if (!['pending', 'confirmed', 'in-progress'].includes(b.status)) return false;
+        const bookingUserId = (b as SharedBooking & { customerUserId?: string }).customerUserId || '';
+        return (
+          (!!authUid && bookingUserId === authUid) ||
+          (!!phone && b.customerPhone === phone) ||
+          (!!email && b.customerPhone === email) ||
+          (!!displayName && b.customerName === displayName)
+        );
+      })
+      .sort(sortByCreatedDesc);
+  }, [bookings, user]);
+
   /**
    * Tab "Đã huỷ" — đọc từ bảng riêng `cancelled_bookings` qua RPC. Mỗi lần focus
-   * Activity hoặc đổi tab sẽ chủ động refresh để khách thấy ngay đơn vừa huỷ.
+   * Activity hoặc đổi tab sẽ chủy động refresh để khách thấy ngay đơn vừa huỷ.
    */
   const cancelledMapped = useMemo(
     () => cancelledBookings.map(cancelledRecordToSharedBooking),
     [cancelledBookings],
   );
 
-  const [selectedStatus, setSelectedStatus] = useState<ActivityFilter>('completed');
+  const [selectedStatus, setSelectedStatus] = useState<ActivityFilter>('active');
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedBooking, setSelectedBooking] = useState<SharedBooking | null>(null);
   const [detailVisible, setDetailVisible] = useState(false);
   const [rebookTarget, setRebookTarget] = useState<{ therapist: Therapist; booking: SharedBooking } | null>(null);
+  const [resumePendingTarget, setResumePendingTarget] = useState<{ therapist: Therapist; booking: SharedBooking } | null>(null);
   const [reviewBooking, setReviewBooking] = useState<SharedBooking | null>(null);
   const [reviewVisible, setReviewVisible] = useState(false);
   const [chatBookingId, setChatBookingId] = useState<string | null>(null);
@@ -218,14 +248,15 @@ export default function ActivityScreen() {
   );
 
   const counts = useMemo(
-    () => ({ completed: recentCompleted.length, cancelled: recentCancelled.length }),
-    [recentCompleted, recentCancelled],
+    () => ({ active: activeBookings.length, completed: recentCompleted.length, cancelled: recentCancelled.length }),
+    [activeBookings, recentCompleted, recentCancelled],
   );
 
-  const filteredBookings = useMemo(
-    () => (selectedStatus === 'completed' ? recentCompleted : recentCancelled),
-    [recentCompleted, recentCancelled, selectedStatus],
-  );
+  const filteredBookings = useMemo(() => {
+    if (selectedStatus === 'active') return activeBookings;
+    if (selectedStatus === 'completed') return recentCompleted;
+    return recentCancelled;
+  }, [activeBookings, recentCompleted, recentCancelled, selectedStatus]);
   const totalPages = Math.max(1, Math.ceil(filteredBookings.length / ACTIVITY_PAGE_SIZE));
   const page = Math.min(currentPage, totalPages);
   const pagedBookings = useMemo(() => {
@@ -249,6 +280,11 @@ export default function ActivityScreen() {
     return replayServicesFromBooking(rebookTarget.booking, rebookTarget.therapist);
   }, [rebookTarget]);
 
+  const resumeSelectedServices = useMemo(() => {
+    if (!resumePendingTarget) return [];
+    return replayServicesFromBooking(resumePendingTarget.booking, resumePendingTarget.therapist);
+  }, [resumePendingTarget]);
+
   const handleBookingPress = (booking: SharedBooking) => {
     setSelectedBooking(booking);
     setDetailVisible(true);
@@ -263,6 +299,20 @@ export default function ActivityScreen() {
         setRebookTarget({ therapist, booking });
       } else {
         Alert.alert('Lỗi', 'Không tìm thấy kỹ thuật viên này');
+      }
+    } catch {
+      Alert.alert('Lỗi', 'Không thể tải thông tin kỹ thuật viên');
+    }
+  };
+
+  const handleResumePending = async (booking: SharedBooking) => {
+    try {
+      const { getTherapistById } = await import('@/lib/supabaseService');
+      const therapist = await getTherapistById(booking.therapistId);
+      if (therapist) {
+        setResumePendingTarget({ therapist, booking });
+      } else {
+        Alert.alert('Lỗi', 'Không tìm thấy kỹ thuật viên');
       }
     } catch {
       Alert.alert('Lỗi', 'Không thể tải thông tin kỹ thuật viên');
@@ -315,10 +365,30 @@ export default function ActivityScreen() {
           </View>
         </View>
 
-        {/* Hàng 4: giá + actions (đặt lại / đánh giá). */}
+        {/* Hàng 4: giá + actions. */}
         <View style={styles.bookingFooter}>
           <Text style={styles.bookingPrice}>{(item.price ?? 0).toLocaleString('vi-VN')} ₫</Text>
           <View style={styles.actionButtons}>
+            {item.status === 'pending' ? (
+              <TouchableOpacity
+                style={[styles.actionBtn, styles.resumeBtn]}
+                onPress={(e) => { e.stopPropagation(); void handleResumePending(item); }}
+              >
+                <Feather name="refresh-cw" size={13} color="#fff" style={{ marginRight: 4 }} />
+                <Text style={[styles.actionBtnText, styles.resumeBtnText]}>
+                  {language === 'en' ? 'Resume' : 'Tiếp tục'}
+                </Text>
+              </TouchableOpacity>
+            ) : null}
+            {(item.status === 'confirmed' || item.status === 'in-progress') ? (
+              <TouchableOpacity
+                style={[styles.actionBtn, styles.chatBtn]}
+                onPress={(e) => { e.stopPropagation(); setChatBookingId(item.id); }}
+              >
+                <Feather name="message-circle" size={13} color="#fff" style={{ marginRight: 4 }} />
+                <Text style={[styles.actionBtnText, styles.chatBtnText]}>{strings.chat}</Text>
+              </TouchableOpacity>
+            ) : null}
             {showReview ? (
               <TouchableOpacity
                 style={[styles.actionBtn, styles.reviewBtn]}
@@ -330,9 +400,11 @@ export default function ActivityScreen() {
                 <Text style={[styles.actionBtnText, styles.reviewBtnText]}>{strings.review}</Text>
               </TouchableOpacity>
             ) : null}
-            <TouchableOpacity style={styles.actionBtn} onPress={() => handleRebook(item)}>
-              <Text style={styles.actionBtnText}>{strings.reschedule}</Text>
-            </TouchableOpacity>
+            {item.status === 'completed' || item.status === 'cancelled' ? (
+              <TouchableOpacity style={styles.actionBtn} onPress={() => handleRebook(item)}>
+                <Text style={styles.actionBtnText}>{strings.reschedule}</Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
         </View>
       </TouchableOpacity>
@@ -341,6 +413,7 @@ export default function ActivityScreen() {
 
   const renderStatusFilter = () => {
     const items: { key: ActivityFilter; label: string; count: number }[] = [
+      { key: 'active', label: strings.active, count: counts.active },
       { key: 'completed', label: strings.completed, count: counts.completed },
       { key: 'cancelled', label: strings.cancelled, count: counts.cancelled },
     ];
@@ -396,8 +469,10 @@ export default function ActivityScreen() {
 
   const isEmptyForTab = filteredBookings.length === 0;
   const emptyTitle =
+    selectedStatus === 'active' ? strings.noBookingsActive :
     selectedStatus === 'completed' ? strings.noBookingsCompleted : strings.noBookingsCancelled;
   const emptyDesc =
+    selectedStatus === 'active' ? strings.noBookingsActiveDesc :
     selectedStatus === 'completed' ? strings.noBookingsCompletedDesc : strings.noBookingsCancelledDesc;
 
   return (
@@ -420,9 +495,9 @@ export default function ActivityScreen() {
           >
             <View style={styles.emptyIllustration}>
               <Feather
-                name={selectedStatus === 'completed' ? 'check-circle' : 'x-circle'}
+                name={selectedStatus === 'active' ? 'clock' : selectedStatus === 'completed' ? 'check-circle' : 'x-circle'}
                 size={40}
-                color={selectedStatus === 'completed' ? AppColors.success : AppColors.danger}
+                color={selectedStatus === 'active' ? AppColors.primary : selectedStatus === 'completed' ? AppColors.success : AppColors.danger}
               />
             </View>
             <Text style={styles.emptyTitle}>{emptyTitle}</Text>
@@ -507,6 +582,27 @@ export default function ActivityScreen() {
               totalPrice={rebookSelectedServices.reduce((acc, s) => acc + s.price, 0)}
               reopenBookingSnapshot={rebookTarget.booking}
               onClose={() => setRebookTarget(null)}
+            />
+          </View>
+        ) : null}
+      </Modal>
+
+      <Modal
+        visible={resumePendingTarget !== null}
+        animationType="slide"
+        presentationStyle="fullScreen"
+        hardwareAccelerated
+        onRequestClose={() => setResumePendingTarget(null)}
+      >
+        {resumePendingTarget ? (
+          <View style={{ flex: 1, backgroundColor: AppColors.bg }}>
+            <BookingConfirmScreen
+              therapist={resumePendingTarget.therapist}
+              selectedServices={resumeSelectedServices}
+              totalPrice={resumeSelectedServices.reduce((acc, s) => acc + s.price, 0)}
+              reopenBookingSnapshot={resumePendingTarget.booking}
+              resumeBookingId={resumePendingTarget.booking.id}
+              onClose={() => setResumePendingTarget(null)}
             />
           </View>
         ) : null}
@@ -757,6 +853,14 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
   },
+  chatBtn: {
+    backgroundColor: AppColors.primaryDark,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  chatBtnText: {
+    color: '#fff',
+  },
   reviewBtn: {
     backgroundColor: AppColors.successBg,
     borderWidth: 1,
@@ -764,6 +868,14 @@ const styles = StyleSheet.create({
   },
   reviewBtnText: {
     color: AppColors.success,
+  },
+  resumeBtn: {
+    backgroundColor: '#e67e22',
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  resumeBtnText: {
+    color: '#fff',
   },
   emptyContainer: {
     flexGrow: 1,

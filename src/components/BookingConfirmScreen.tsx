@@ -1,6 +1,7 @@
 import { type BookingStatus, type SharedBooking, useBookings } from '@/contexts/BookingsContext';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useUser } from '@/contexts/UserContext';
+import { getMergedTherapistRating } from '@/lib/therapistRating';
 import { checkPayOSPaymentStatus, createPayOSPayment } from '@/lib/payosService';
 import { debugLog } from '@/lib/debugLog';
 import { clearPendingCustomerBookingBanner } from '@/lib/pendingCustomerBookingBanner';
@@ -114,16 +115,22 @@ export default function BookingConfirmScreen({
   /** Khi tái đặt từ đơn đã huỷ ở Hoạt động — hydrate cart/địa chỉ/phương thức thanh toán đúng payload cũ. */
   reopenBookingSnapshot,
   onClose,
+  onChatClose,
+  resumeBookingId,
 }: {
   therapist: Therapist;
   selectedServices: SelectedService[];
   totalPrice: number;
   reopenBookingSnapshot?: SharedBooking | null;
   onClose: () => void;
+  /** Gọi khi user đóng chat sau khi KTV xác nhận — thường dùng để đóng luôn cả màn hình cha. */
+  onChatClose?: () => void;
+  /** ID đơn pending đang chờ — tự mở lại màn search và tiếp tục chờ KTV xác nhận. */
+  resumeBookingId?: string;
 }) {
   const router = useRouter();
   const { user } = useUser();
-  const { updateStatus, refreshBookings, refreshCancelledBookings } = useBookings();
+  const { updateStatus, refreshBookings, refreshCancelledBookings, getReviewsForTherapist } = useBookings();
   const { language } = useLanguage();
   const insets = useSafeAreaInsets();
   const headerTopPadding = Math.max(insets.top, Platform.OS === 'ios' ? 44 : 10);
@@ -265,7 +272,7 @@ export default function BookingConfirmScreen({
 
   const promoDiscount = appliedPromo ? computePromoDiscount(baseCartTotal, appliedPromo) : 0;
   const cartTotal = Math.max(0, baseCartTotal - promoDiscount);
-  const [showSearchScreen, setShowSearchScreen] = useState(false);
+  const [showSearchScreen, setShowSearchScreen] = useState(() => Boolean(resumeBookingId));
   const [bookNowChecking, setBookNowChecking] = useState(false);
 
   const handleApplyPromo = async () => {
@@ -632,6 +639,10 @@ export default function BookingConfirmScreen({
 
   // ===== MAIN BOOKING CONFIRM SCREEN =====
   const selectedPayment = PAYMENT_METHODS.find((pm) => pm.id === paymentMethod);
+  const mergedTherapistRating = getMergedTherapistRating(
+    therapist,
+    getReviewsForTherapist(therapist.id),
+  );
 
   return (
     <SafeAreaView style={s.container} edges={['left', 'right', 'bottom']}>
@@ -690,8 +701,8 @@ export default function BookingConfirmScreen({
                 <Text style={s.therapistName}>{therapist.name}</Text>
                 <View style={s.therapistRatingRow}>
                   <Text style={s.starIcon}>⭐</Text>
-                  <Text style={s.ratingValue}>{therapist.rating.toFixed(1)}</Text>
-                  <Text style={s.reviewCount}>({therapist.reviewCount} đánh giá)</Text>
+                  <Text style={s.ratingValue}>{mergedTherapistRating.rating.toFixed(1)}</Text>
+                  <Text style={s.reviewCount}>({mergedTherapistRating.reviewCount} đánh giá)</Text>
                 </View>
               </View>
             </View>
@@ -808,6 +819,8 @@ export default function BookingConfirmScreen({
           therapist={therapist}
           onDismiss={() => setShowSearchScreen(false)}
           onExitBooking={onClose}
+          onChatClose={onChatClose}
+          existingBookingId={resumeBookingId}
           cartServices={cartServices}
           cartTotal={cartTotal}
           appliedPromotionId={appliedPromo?.id ?? null}
@@ -1127,6 +1140,8 @@ function BookingSearchModal({
   therapist,
   onDismiss,
   onExitBooking,
+  onChatClose,
+  existingBookingId,
   cartServices,
   cartTotal,
   appliedPromotionId = null,
@@ -1142,6 +1157,10 @@ function BookingSearchModal({
   onDismiss: () => void;
   /** Đóng hẳn luồng đặt lịch (từ màn Thông tin đặt lịch). */
   onExitBooking: () => void;
+  /** Đóng hết màn hình khi user back từ chat sau khi KTV xác nhận. */
+  onChatClose?: () => void;
+  /** Tiếp tục đơn pending đã tạo trước — bỏ qua bước tạo đơn mới. */
+  existingBookingId?: string;
   cartServices: SelectedService[];
   cartTotal: number;
   appliedPromotionId?: string | null;
@@ -1189,9 +1208,11 @@ function BookingSearchModal({
   const [showPopup, setShowPopup] = useState(false);
   const [highlightedTherapistId, setHighlightedTherapistId] = useState<string | null>(null);
   const [userLocation, setUserLocation] = useState(DEFAULT_LOCATION);
+  const userLocationRef = useRef(DEFAULT_LOCATION);
+  userLocationRef.current = userLocation;
   const [connectingTherapist, setConnectingTherapist] = useState<NearbyTherapist | null>(null);
   const [nearbyPositions, setNearbyPositions] = useState<TherapistMapPoint[]>([]);
-  const [createdBookingId, setCreatedBookingId] = useState<string | null>(null);
+  const [createdBookingId, setCreatedBookingId] = useState<string | null>(existingBookingId ?? null);
   const [activeTherapistId, setActiveTherapistId] = useState(therapist.id);
   const [chatBookingId, setChatBookingId] = useState<string | null>(null);
   const [payosPaid, setPayosPaid] = useState(paymentMethod !== 'payos');
@@ -1203,10 +1224,12 @@ function BookingSearchModal({
   /** Gỡ Mapbox khỏi cây React trước khi đóng overlay — tránh crash native khi unmount đồng thời với Modal. */
   const [detachMapSurface, setDetachMapSurface] = useState(false);
   const leaveTransitionLockRef = useRef(false);
-  const createdBookingIdRef = useRef<string | null>(null);
+  const createdBookingIdRef = useRef<string | null>(existingBookingId ?? null);
   const activeTherapistIdRef = useRef(therapist.id);
   const payosPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const bootstrappedBookingRef = useRef(false);
+  const bootstrappedBookingRef = useRef(Boolean(existingBookingId));
+  const isMountedRef = useRef(true);
+  useEffect(() => { return () => { isMountedRef.current = false; }; }, []);
   const [liveBookingRow, setLiveBookingRow] = useState<Record<string, unknown> | null>(null);
   const [primarySeconds, setPrimarySeconds] = useState(15 * 60);
 
@@ -1407,6 +1430,16 @@ function BookingSearchModal({
       setDetachMapSurface(true);
     });
   }, []);
+
+  // Đóng chat khi booking đã confirmed — KHÔNG huỷ đơn, chỉ đóng overlay.
+  const handleChatClose = useCallback(() => {
+    void clearPendingCustomerBookingBanner().catch(() => {});
+    if (onChatClose) {
+      onChatClose();
+    } else {
+      onExitBooking();
+    }
+  }, [onChatClose, onExitBooking]);
 
   useEffect(() => {
     createdBookingIdRef.current = createdBookingId;
@@ -1642,9 +1675,10 @@ function BookingSearchModal({
   }, [createdBookingId]);
 
   useEffect(() => {
+    if (!createdBookingId) return;
     const timer = setTimeout(() => setShowPopup(true), 3000);
     return () => clearTimeout(timer);
-  }, []);
+  }, [createdBookingId]);
 
   const stopPayosPolling = useCallback(() => {
     if (payosPollRef.current) {
@@ -1848,10 +1882,11 @@ function BookingSearchModal({
           now,
           paymentMethod,
           jobCity,
-          userLocation,
+          userLocationRef.current,
         );
         const bookingId = await createSharedBookingRecord(bookingPayload);
-        if (cancelled) {
+        if (cancelled && !isMountedRef.current) {
+          // Component truly unmounted — clean up orphan booking.
           await deleteBookingRecord(bookingId).catch(() => {});
           return;
         }
@@ -1934,7 +1969,6 @@ function BookingSearchModal({
     user?.phoneNumber,
     appliedPromotionId,
     currentCityLabel,
-    userLocation,
     user?.selectedCity,
     user?.workingCity,
   ]);
@@ -2121,7 +2155,7 @@ function BookingSearchModal({
   if (chatBookingId) {
     return (
       <View style={bs.searchOverlayRoot}>
-        <ChatScreen onClose={handleExitSearch} bookingId={chatBookingId} />
+        <ChatScreen onClose={handleChatClose} bookingId={chatBookingId} />
       </View>
     );
   }

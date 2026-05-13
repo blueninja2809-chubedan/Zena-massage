@@ -29,8 +29,9 @@ import { useBookings } from '@/contexts/BookingsContext';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useNotifications } from '@/contexts/NotificationContext';
 import { useUser } from '@/contexts/UserContext';
+import { supabase } from '@/lib/supabase';
 import { getLocalDateString, getOrCreateWallet, getTherapistShifts, saveTherapistShifts } from '@/lib/supabaseService';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 
 const translations: Record<OnboardingLanguage, Record<string, string>> = {
   vi: {
@@ -54,6 +55,9 @@ const translations: Record<OnboardingLanguage, Record<string, string>> = {
     saveError: 'Không thể lưu ca làm việc. Vui lòng thử lại.',
     support: 'Hỗ trợ',
     supportChannels: 'Kênh hỗ trợ',
+    activeBookings: 'Đơn đang thực hiện',
+    chatWithCustomer: 'Chat với khách',
+    noActiveBookings: 'Chưa có đơn được xác nhận',
   },
   en: {
     title: 'Shift schedule',
@@ -76,6 +80,9 @@ const translations: Record<OnboardingLanguage, Record<string, string>> = {
     saveError: 'Could not save shifts. Please try again.',
     support: 'Support',
     supportChannels: 'Support channels',
+    activeBookings: 'Active bookings',
+    chatWithCustomer: 'Chat with customer',
+    noActiveBookings: 'No confirmed bookings yet',
   },
 };
 
@@ -111,7 +118,7 @@ export default function TherapistScheduleScreen() {
   const router = useRouter();
   const { language } = useLanguage();
   const { user } = useUser();
-  const { getTherapistBookings } = useBookings();
+  const { getTherapistBookings, refreshBookings } = useBookings();
   const t = translations[language as OnboardingLanguage] || translations.vi;
   const [walletBalance, setWalletBalance] = useState(0);
   const [showWallet, setShowWallet] = useState(false);
@@ -120,7 +127,17 @@ export default function TherapistScheduleScreen() {
   const [saving, setSaving] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [showChat, setShowChat] = useState(false);
-  const { unreadCount } = useNotifications();
+  const [chatBookingId, setChatBookingId] = useState<string | null>(null);
+  const { unreadCount, pendingChatBookingId, clearPendingChatBooking } = useNotifications();
+
+  // Option A: tự động mở chat sau khi KTV accept đơn
+  useEffect(() => {
+    if (pendingChatBookingId) {
+      setChatBookingId(pendingChatBookingId);
+      setShowChat(true);
+      clearPendingChatBooking();
+    }
+  }, [pendingChatBookingId, clearPendingChatBooking]);
 
   // Shift data per date: { 'YYYY-MM-DD': string[] }
   const [shiftsByDate, setShiftsByDate] = useState<Record<string, string[]>>({});
@@ -143,6 +160,10 @@ export default function TherapistScheduleScreen() {
   const tomorrowBookings = useMemo(
     () => allBookings.filter((b) => b.date === tomorrowDate && b.status !== 'cancelled'),
     [allBookings, tomorrowDate],
+  );
+  const activeBookings = useMemo(
+    () => allBookings.filter((b) => b.status === 'confirmed' || b.status === 'in-progress'),
+    [allBookings],
   );
 
   const loadWalletBalance = useCallback(() => {
@@ -169,6 +190,36 @@ export default function TherapistScheduleScreen() {
     loadWalletBalance();
     loadShifts();
   }, [loadWalletBalance, loadShifts]);
+
+  // Realtime: cập nhật số dư ví ngay khi bảng wallets thay đổi (ví dụ: trừ 20% phí sau hoàn thành đơn)
+  useEffect(() => {
+    const uid = user?.authUid;
+    if (!uid) return;
+    const channel = supabase
+      .channel(`wallet-balance-${uid}`)
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'wallets', filter: `user_id=eq.${uid}` },
+        (payload) => {
+          const newBal = (payload.new as Record<string, unknown>)?.balance;
+          if (typeof newBal === 'number') {
+            setWalletBalance(newBal);
+          } else {
+            loadWalletBalance();
+          }
+        },
+      )
+      .subscribe();
+    return () => { void supabase.removeChannel(channel); };
+  }, [user?.authUid, loadWalletBalance]);
+
+  // Refresh bookings + wallet khi tab được focus
+  useFocusEffect(
+    useCallback(() => {
+      void refreshBookings();
+      loadWalletBalance();
+    }, [refreshBookings, loadWalletBalance]),
+  );
 
   const todaySlots = shiftsByDate[today] || [];
   const tomorrowSlots = shiftsByDate[tomorrowDate] || [];
@@ -230,7 +281,7 @@ export default function TherapistScheduleScreen() {
               <Image source={{ uri: user.avatarUri }} style={s.avatar} />
             ) : (
               <View style={s.avatarFallback}>
-                <Text style={s.avatarText}>👩</Text>
+                <Feather name="user" size={20} color={C.accent} />
               </View>
             )}
             <Text style={s.locationText}>{t.location}</Text>
@@ -327,6 +378,34 @@ export default function TherapistScheduleScreen() {
           )}
         </View>
 
+        {/* Option B: Active bookings list with chat button */}
+        <View style={{ marginTop: 20 }}>
+          <Text style={s.title}>{t.activeBookings}</Text>
+          {activeBookings.length === 0 ? (
+            <Text style={[s.daySub, { marginTop: 8 }]}>{t.noActiveBookings}</Text>
+          ) : (
+            activeBookings.map((b) => (
+              <View key={b.id} style={s.activeBookingCard}>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.activeBookingName} numberOfLines={1}>{b.customerName}</Text>
+                  <Text style={s.activeBookingInfo} numberOfLines={1}>{b.service} · {b.date} {b.time}</Text>
+                  <Text style={[s.activeBookingStatus, b.status === 'in-progress' && { color: '#5F8F47' }]}>
+                    {b.status === 'confirmed' ? 'Đã xác nhận' : 'Đang thực hiện'}
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={s.chatBtn}
+                  onPress={() => { setChatBookingId(b.id); setShowChat(true); }}
+                  activeOpacity={0.8}
+                >
+                  <Feather name="message-circle" size={16} color="#fff" />
+                  <Text style={s.chatBtnText}>{t.chatWithCustomer}</Text>
+                </TouchableOpacity>
+              </View>
+            ))
+          )}
+        </View>
+
       </ScrollView>
 
       {/* Top-up screen */}
@@ -402,9 +481,9 @@ export default function TherapistScheduleScreen() {
         </ModalSafeAreaProvider>
       </Modal>
 
-      <Modal visible={showChat} animationType="slide" onRequestClose={() => setShowChat(false)}>
+      <Modal visible={showChat} animationType="slide" onRequestClose={() => { setShowChat(false); setChatBookingId(null); }}>
         <ModalSafeAreaProvider>
-          <ChatScreen onClose={() => setShowChat(false)} />
+          <ChatScreen onClose={() => { setShowChat(false); setChatBookingId(null); }} bookingId={chatBookingId ?? undefined} />
         </ModalSafeAreaProvider>
       </Modal>
 
@@ -426,7 +505,6 @@ const s = StyleSheet.create({
   headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   avatar: { width: 36, height: 36, borderRadius: 18 },
   avatarFallback: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#EDE0E2', alignItems: 'center', justifyContent: 'center' },
-  avatarText: { fontSize: 18 },
   locationText: {
     fontSize: 16,
     fontWeight: '700',
@@ -514,4 +592,19 @@ const s = StyleSheet.create({
   modalDaySection: { marginBottom: 24 },
   modalDayLabel: { fontSize: 16, fontWeight: '800', color: C.text, marginBottom: 12 },
   modalSlotWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  activeBookingCard: {
+    flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff',
+    borderRadius: 12, padding: 14, marginTop: 10,
+    borderWidth: 1, borderColor: C.line,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 4, elevation: 2,
+  },
+  activeBookingName: { fontSize: 15, fontWeight: '700', color: C.text },
+  activeBookingInfo: { fontSize: 13, color: C.sub, marginTop: 2 },
+  activeBookingStatus: { fontSize: 12, fontWeight: '600', color: '#F59E0B', marginTop: 4 },
+  chatBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: C.accent, paddingHorizontal: 12, paddingVertical: 8,
+    borderRadius: 10, marginLeft: 10,
+  },
+  chatBtnText: { color: '#fff', fontSize: 12, fontWeight: '700' },
 });

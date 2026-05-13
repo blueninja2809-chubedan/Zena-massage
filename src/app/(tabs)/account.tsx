@@ -295,16 +295,178 @@ const DEFAULT_NOTICE_STATE: NoticeModalState = {
   variant: 'default',
 };
 
+/**
+ * Bảng dịch màn Account + flow phụ.
+ * Tất cả label hiển thị đều đi qua đây; canonical key giữ tiếng Anh để
+ * dev đỡ rối khi tham chiếu trong code.
+ */
+const ACCOUNT_T = {
+  vi: {
+    // Main menu
+    activityHistory: 'Lịch sử hoạt động',
+    orderHistory: 'Lịch sử đơn hàng',
+    personalInfo: 'Thông tin cá nhân',
+    language: 'Ngôn ngữ',
+    country: 'Quốc gia',
+    countryValue: 'Việt Nam',
+    about: 'Về chúng tôi',
+    aboutVersion: 'Phiên bản 1.0.0',
+    aboutLong:
+      'Phiên bản 1.0.0\n\nỨng dụng đặt lịch massage và spa tại nhà.\n\n© 2026 Zena. All rights reserved.',
+    logout: 'Đăng xuất',
+    languageName: 'Tiếng Việt',
+    // VIP
+    vipMember: 'Hội viên VIP',
+    vipRegister: 'Đăng ký trở thành hội viên',
+    // Delete account
+    deleteAccount: 'Xóa tài khoản',
+    deletingAccount: 'Đang xử lý...',
+    deleteConfirmTitle: 'Xóa tài khoản',
+    deleteConfirmMessage:
+      'Tài khoản và dữ liệu liên quan (đặt lịch, địa chỉ, thông báo, ví…) sẽ bị xóa vĩnh viễn trên hệ thống. Bạn có chắc chắn?',
+    deleteConfirmCancel: 'Hủy',
+    deleteConfirmContinue: 'Tiếp tục',
+    deletePasswordTitle: 'Xác nhận mật khẩu',
+    deletePasswordHint:
+      'Nhập mật khẩu đăng nhập bằng số điện thoại để xóa tài khoản trên máy chủ.',
+    deletePasswordPlaceholder: 'Mật khẩu',
+    deletePasswordCancel: 'Hủy',
+    deletePasswordSubmit: 'Xóa vĩnh viễn',
+    deletePasswordWorking: 'Đang xóa...',
+    deleteFailedTitle: 'Không thể xóa tài khoản',
+    deleteDoneTitle: 'Đã xóa tài khoản',
+    deleteDoneMessage: 'Dữ liệu tài khoản trên hệ thống đã được gỡ.',
+    // Promo placeholder
+    comingSoonTitle: 'Sắp ra mắt',
+    comingSoonMessage: 'Tính năng này sắp ra mắt.',
+    // Profile details
+    profileTitle: 'Thông tin tài khoản',
+    profileFullName: 'Họ và tên',
+    profileFullNamePlaceholder: 'Nhập họ và tên',
+    profileArea: 'Khu vực (tỉnh, thành)',
+    profileAreaSelect: 'Chọn tỉnh, thành phố —',
+    profileAge: 'Độ tuổi',
+    profileAgePlaceholder: 'Ví dụ: 25',
+    profilePhone: 'Số điện thoại',
+    profilePhonePlaceholder: 'Nhập số điện thoại',
+    profileGender: 'Giới tính',
+    profileGenderMale: 'Nam',
+    profileGenderFemale: 'Nữ',
+    profileGenderOther: 'Khác',
+    profileNationality: 'Quốc tịch',
+    profileNationalityPlaceholder: 'Nhập quốc tịch',
+    profileVerify: 'Xác minh hồ sơ',
+    profileVerifyNotYet: 'Chưa xác minh ›',
+    profileVerifyComingTitle: 'Thông báo',
+    profileVerifyComing: 'Tính năng xác minh hồ sơ sẽ được cập nhật sau.',
+    profileChangePassword: 'Đổi mật khẩu',
+    profilePasswordPlaceholder: 'Nhập mật khẩu mới',
+    profileSave: 'Lưu thay đổi',
+    profileSaving: 'Đang lưu...',
+    profileSaveOkTitle: 'Thành công',
+    profileSaveOkMessage: 'Thông tin tài khoản đã được cập nhật.',
+    profileSaveErrTitle: 'Lỗi lưu hồ sơ',
+    profileNeedInfoTitle: 'Thiếu thông tin',
+    profileNeedPhoneOrEmail: 'Vui lòng nhập số điện thoại hoặc email.',
+    profileAgeErrTitle: 'Độ tuổi',
+    profileAgeErrMsg: 'Nhập độ tuổi từ 16 đến 90, hoặc để trống.',
+    profileAreaErrTitle: 'Khu vực',
+    profileAreaErrMsg: 'Vui lòng chọn tỉnh/thành trong danh sách.',
+    profilePermissionTitle: 'Chưa có quyền',
+    profilePermissionMsg: 'Vui lòng cho phép ứng dụng truy cập thư viện ảnh.',
+    provinceModalTitle: 'Chọn tỉnh, thành phố',
+    provinceModalSearch: 'Tìm tỉnh, thành phố…',
+    provinceModalEmpty: 'Không tìm thấy tỉnh/thành phù hợp',
+    provinceModalClose: 'Đóng',
+  },
+  en: {
+    activityHistory: 'Activity history',
+    orderHistory: 'Order history',
+    personalInfo: 'Personal information',
+    language: 'Language',
+    country: 'Country',
+    countryValue: 'Vietnam',
+    about: 'About us',
+    aboutVersion: 'Version 1.0.0',
+    aboutLong:
+      'Version 1.0.0\n\nAt-home massage and spa booking app.\n\n© 2026 Zena. All rights reserved.',
+    logout: 'Sign out',
+    languageName: 'English',
+    vipMember: 'VIP member',
+    vipRegister: 'Become a member',
+    deleteAccount: 'Delete account',
+    deletingAccount: 'Processing...',
+    deleteConfirmTitle: 'Delete account',
+    deleteConfirmMessage:
+      'Your account and related data (bookings, addresses, notifications, wallet…) will be permanently deleted. Are you sure?',
+    deleteConfirmCancel: 'Cancel',
+    deleteConfirmContinue: 'Continue',
+    deletePasswordTitle: 'Confirm password',
+    deletePasswordHint:
+      'Enter your phone sign-in password to delete the account on the server.',
+    deletePasswordPlaceholder: 'Password',
+    deletePasswordCancel: 'Cancel',
+    deletePasswordSubmit: 'Delete permanently',
+    deletePasswordWorking: 'Deleting...',
+    deleteFailedTitle: 'Could not delete account',
+    deleteDoneTitle: 'Account deleted',
+    deleteDoneMessage: 'Your account data has been removed from the system.',
+    comingSoonTitle: 'Coming soon',
+    comingSoonMessage: 'This feature is coming soon.',
+    profileTitle: 'Account information',
+    profileFullName: 'Full name',
+    profileFullNamePlaceholder: 'Enter full name',
+    profileArea: 'Area (province/city)',
+    profileAreaSelect: 'Choose province/city —',
+    profileAge: 'Age',
+    profileAgePlaceholder: 'e.g. 25',
+    profilePhone: 'Phone number',
+    profilePhonePlaceholder: 'Enter phone number',
+    profileGender: 'Gender',
+    profileGenderMale: 'Male',
+    profileGenderFemale: 'Female',
+    profileGenderOther: 'Other',
+    profileNationality: 'Nationality',
+    profileNationalityPlaceholder: 'Enter nationality',
+    profileVerify: 'Profile verification',
+    profileVerifyNotYet: 'Not verified ›',
+    profileVerifyComingTitle: 'Notice',
+    profileVerifyComing: 'Profile verification will be available soon.',
+    profileChangePassword: 'Change password',
+    profilePasswordPlaceholder: 'Enter new password',
+    profileSave: 'Save changes',
+    profileSaving: 'Saving...',
+    profileSaveOkTitle: 'Success',
+    profileSaveOkMessage: 'Your account info has been updated.',
+    profileSaveErrTitle: 'Save failed',
+    profileNeedInfoTitle: 'Missing information',
+    profileNeedPhoneOrEmail: 'Please enter a phone number or email.',
+    profileAgeErrTitle: 'Age',
+    profileAgeErrMsg: 'Enter an age from 16 to 90, or leave blank.',
+    profileAreaErrTitle: 'Area',
+    profileAreaErrMsg: 'Please choose a province/city from the list.',
+    profilePermissionTitle: 'Permission needed',
+    profilePermissionMsg: 'Please allow access to your photo library.',
+    provinceModalTitle: 'Choose province/city',
+    provinceModalSearch: 'Search province/city…',
+    provinceModalEmpty: 'No matching province/city',
+    provinceModalClose: 'Close',
+  },
+} as const;
+
+type AccountStrings = (typeof ACCOUNT_T)['vi'];
+
 export default function AccountScreen() {
   const tabBarBottomInset = useBottomTabBarHeight();
   const { language, setLanguage } = useLanguage();
+  const t = ACCOUNT_T[language === 'en' ? 'en' : 'vi'];
   const { hideVipSubscription } = useReviewMode();
   const { user, setUser, logout } = useUser();
   const router = useRouter();
   const [currentScreen, setCurrentScreen] = useState<
     'account' | 'signin' | 'signup' | 'profile' | 'therapistSetup' | 'vipMembership' | 'partnerSignupType' | 'partnerBusinessSignup'
   >('account');
-  const [country] = useState({ code: 'VN', label: 'Việt Nam', flag: '\uD83C\uDDFB\uD83C\uDDF3' });
+  const [country] = useState({ code: 'VN', flag: '\uD83C\uDDFB\uD83C\uDDF3' });
   const tabletLayout = useTabletLayout();
 
   const handlePhoneSignIn = async (payload: { phone: string; password: string }) => {
@@ -384,6 +546,7 @@ export default function AccountScreen() {
     return (
       <ProfileDetailsScreen
         user={user}
+        strings={t}
         onBack={() => setCurrentScreen('account')}
         onSave={async (updatedUser) => {
           try {
@@ -456,23 +619,28 @@ export default function AccountScreen() {
   }
   const displayName = user?.displayName || user?.phoneNumber || '';
   const isAdminAccount = user?.role === 'admin' || isAdminPhone(user?.phoneNumber);
-  const langLabel = language === 'vi' ? 'Tiếng Việt' : 'English';
-  const genderLabel = user?.gender === 'female' ? 'Nữ' : user?.gender === 'male' ? 'Nam' : '';
+  const langLabel = t.languageName;
+  const genderLabel =
+    user?.gender === 'female'
+      ? t.profileGenderFemale
+      : user?.gender === 'male'
+        ? t.profileGenderMale
+        : '';
   const avatarInitials = getInitials(displayName || 'Zena');
-  const vipLabel = user?.isVipMember ? 'Hội viên VIP' : 'Đăng ký trở thành hội viên';
+  const vipLabel = user?.isVipMember ? t.vipMember : t.vipRegister;
 
   const handleDeleteAccount = async (password?: string) => {
     if (!user) return;
     await deleteUserAccountOnServer(user, password);
     await logout();
-    Alert.alert('Đã xóa tài khoản', 'Dữ liệu tài khoản trên hệ thống đã được gỡ.');
+    Alert.alert(t.deleteDoneTitle, t.deleteDoneMessage);
   };
 
   const rewardPromoCard = (
     <TouchableOpacity
       style={s.promoRewardCard}
       activeOpacity={0.85}
-      onPress={() => Alert.alert('Sắp ra mắt', 'Tính năng này sắp ra mắt.')}
+      onPress={() => Alert.alert(t.comingSoonTitle, t.comingSoonMessage)}
     >
       <Image
         source={require('@/assets/images/promo-reward-banner.png')}
@@ -526,7 +694,6 @@ export default function AccountScreen() {
                     </View>
                   ) : null}
                 </View>
-                <Text style={s.profilePhone}>{user.email || user.phoneNumber || ''}</Text>
               </View>
             </View>
 
@@ -545,19 +712,19 @@ export default function AccountScreen() {
           </View>
 
           <View style={s.menuCard}>
-            <MenuRow icon="package" label="Lịch sử đơn hàng" onPress={() => router.push('/therapist-order-history')} />
-            <MenuRow icon="user" label="Thông tin cá nhân" onPress={() => setCurrentScreen('profile')} />
-            <MenuRow icon="globe" label="Ngôn ngữ" value={langLabel} onPress={() => setLanguage(language === 'vi' ? 'en' : 'vi')} />
-            <MenuRow icon="flag" label="Quốc gia" value={`${country.flag} ${country.label}`} onPress={() => {}} />
-            <MenuRow icon="info" label="Về chúng tôi" onPress={() => Alert.alert('Zena', 'Phiên bản 1.0.0')} isLast />
+            <MenuRow icon="package" label={t.orderHistory} onPress={() => router.push('/therapist-order-history')} />
+            <MenuRow icon="user" label={t.personalInfo} onPress={() => setCurrentScreen('profile')} />
+            <MenuRow icon="globe" label={t.language} value={langLabel} onPress={() => setLanguage(language === 'vi' ? 'en' : 'vi')} />
+            <MenuRow icon="flag" label={t.country} value={`${country.flag} ${t.countryValue}`} onPress={() => {}} />
+            <MenuRow icon="info" label={t.about} onPress={() => Alert.alert('Zena', t.aboutVersion)} isLast />
           </View>
 
           <TouchableOpacity style={s.logoutBtn} onPress={logout} activeOpacity={0.85}>
             <Feather name="log-out" size={18} color={COLORS.red} />
-            <Text style={s.logoutBtnText}>Đăng xuất</Text>
+            <Text style={s.logoutBtnText}>{t.logout}</Text>
           </TouchableOpacity>
 
-          <AccountDeleteEntry user={user} onDeleteComplete={handleDeleteAccount} />
+          <AccountDeleteEntry user={user} strings={t} onDeleteComplete={handleDeleteAccount} />
         </ScrollView>
       </SafeAreaView>
     );
@@ -592,7 +759,6 @@ export default function AccountScreen() {
                     </View>
                   ) : null}
                 </View>
-                {(user.email || user.phoneNumber) && <Text style={s.profilePhone}>{user.email || user.phoneNumber}</Text>}
                 {genderLabel ? <Text style={s.profileGender}>{genderLabel}</Text> : null}
               </View>
             </View>
@@ -614,20 +780,20 @@ export default function AccountScreen() {
 
             {/* Menu */}
             <View style={s.menuCard}>
-              <MenuRow icon="clock" label="Lịch sử hoạt động" onPress={() => router.push('/activity')} />
-              <MenuRow icon="user" label="Thông tin cá nhân" onPress={() => setCurrentScreen('profile')} />
-              <MenuRow icon="globe" label="Ngôn ngữ" value={langLabel} onPress={() => setLanguage(language === 'vi' ? 'en' : 'vi')} />
-              <MenuRow icon="flag" label="Quốc gia" value={`${country.flag} ${country.label}`} onPress={() => {}} />
-              <MenuRow icon="info" label="Về chúng tôi" onPress={() => Alert.alert('Zena', 'Phiên bản 1.0.0\n\nỨng dụng đặt lịch massage và spa tại nhà.\n\n© 2026 Zena. All rights reserved.')} isLast />
+              <MenuRow icon="clock" label={t.activityHistory} onPress={() => router.push('/activity')} />
+              <MenuRow icon="user" label={t.personalInfo} onPress={() => setCurrentScreen('profile')} />
+              <MenuRow icon="globe" label={t.language} value={langLabel} onPress={() => setLanguage(language === 'vi' ? 'en' : 'vi')} />
+              <MenuRow icon="flag" label={t.country} value={`${country.flag} ${t.countryValue}`} onPress={() => {}} />
+              <MenuRow icon="info" label={t.about} onPress={() => Alert.alert('Zena', t.aboutLong)} isLast />
             </View>
 
             {/* Logout */}
             <TouchableOpacity style={s.logoutBtn} onPress={logout} activeOpacity={0.85}>
               <Feather name="log-out" size={18} color={COLORS.red} />
-              <Text style={s.logoutBtnText}>Đăng xuất</Text>
+              <Text style={s.logoutBtnText}>{t.logout}</Text>
             </TouchableOpacity>
 
-            <AccountDeleteEntry user={user} onDeleteComplete={handleDeleteAccount} />
+            <AccountDeleteEntry user={user} strings={t} onDeleteComplete={handleDeleteAccount} />
           </>
         ) : null}
       </ScrollView>
@@ -1031,9 +1197,11 @@ function BusinessPartnerSignupScreen({
 
 function AccountDeleteEntry({
   user,
+  strings,
   onDeleteComplete,
 }: {
   user: UserData;
+  strings: AccountStrings;
   onDeleteComplete: (password?: string) => Promise<void>;
 }) {
   const [showDeletePasswordModal, setShowDeletePasswordModal] = useState(false);
@@ -1045,7 +1213,7 @@ function AccountDeleteEntry({
     try {
       await onDeleteComplete(password);
     } catch (e) {
-      Alert.alert('Không thể xóa tài khoản', getAccountDeleteErrorMessage(e));
+      Alert.alert(strings.deleteFailedTitle, getAccountDeleteErrorMessage(e));
     } finally {
       setDeleteBusy(false);
     }
@@ -1053,12 +1221,12 @@ function AccountDeleteEntry({
 
   const handleDelete = () => {
     Alert.alert(
-      'Xóa tài khoản',
-      'Tài khoản và dữ liệu liên quan (đặt lịch, địa chỉ, thông báo, ví…) sẽ bị xóa vĩnh viễn trên hệ thống. Bạn có chắc chắn?',
+      strings.deleteConfirmTitle,
+      strings.deleteConfirmMessage,
       [
-        { text: 'Hủy', style: 'cancel' },
+        { text: strings.deleteConfirmCancel, style: 'cancel' },
         {
-          text: 'Tiếp tục',
+          text: strings.deleteConfirmContinue,
           style: 'destructive',
           onPress: async () => {
             const oauth = user.authUid
@@ -1086,7 +1254,7 @@ function AccountDeleteEntry({
       >
         <Feather name="trash-2" size={17} color={COLORS.red} />
         <Text style={s.accountDeleteBtnText}>
-          {deleteBusy ? 'Đang xử lý...' : 'Xóa tài khoản'}
+          {deleteBusy ? strings.deletingAccount : strings.deleteAccount}
         </Text>
       </TouchableOpacity>
 
@@ -1098,14 +1266,12 @@ function AccountDeleteEntry({
       >
         <View style={s.deleteModalBackdrop}>
           <View style={s.deleteModalCard}>
-            <Text style={s.deleteModalTitle}>Xác nhận mật khẩu</Text>
-            <Text style={s.deleteModalHint}>
-              Nhập mật khẩu đăng nhập bằng số điện thoại để xóa tài khoản trên máy chủ.
-            </Text>
+            <Text style={s.deleteModalTitle}>{strings.deletePasswordTitle}</Text>
+            <Text style={s.deleteModalHint}>{strings.deletePasswordHint}</Text>
             <TextInput
               value={deletePassword}
               onChangeText={setDeletePassword}
-              placeholder="Mật khẩu"
+              placeholder={strings.deletePasswordPlaceholder}
               placeholderTextColor="#A0A0A0"
               secureTextEntry
               style={s.deleteModalInput}
@@ -1120,7 +1286,7 @@ function AccountDeleteEntry({
                 onPress={() => !deleteBusy && setShowDeletePasswordModal(false)}
                 activeOpacity={0.8}
               >
-                <Text style={s.deleteModalCancelText}>Hủy</Text>
+                <Text style={s.deleteModalCancelText}>{strings.deletePasswordCancel}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={s.deleteModalConfirmBtn}
@@ -1128,7 +1294,9 @@ function AccountDeleteEntry({
                 activeOpacity={0.85}
                 disabled={deleteBusy}
               >
-                <Text style={s.deleteModalConfirmText}>{deleteBusy ? 'Đang xóa...' : 'Xóa vĩnh viễn'}</Text>
+                <Text style={s.deleteModalConfirmText}>
+                  {deleteBusy ? strings.deletePasswordWorking : strings.deletePasswordSubmit}
+                </Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -1168,13 +1336,16 @@ function MenuRow({ icon, label, value, onPress, color, isLast }: {
 
 function ProfileDetailsScreen({
   user,
+  strings,
   onBack,
   onSave,
 }: {
   user: UserData;
+  strings: AccountStrings;
   onBack: () => void;
   onSave: (user: UserData) => Promise<void>;
 }) {
+  const t = strings;
   const [displayName, setDisplayName] = useState(user.displayName || '');
   const [phoneNumber, setPhoneNumber] = useState(user.phoneNumber || '');
   const [area, setArea] = useState(user.selectedCity?.trim() || '');
@@ -1201,7 +1372,7 @@ function ProfileDetailsScreen({
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
 
     if (!permission.granted) {
-      Alert.alert('Chưa có quyền', 'Vui lòng cho phép ứng dụng truy cập thư viện ảnh.');
+      Alert.alert(t.profilePermissionTitle, t.profilePermissionMsg);
       return;
     }
 
@@ -1219,7 +1390,7 @@ function ProfileDetailsScreen({
 
   const handleSave = async () => {
     if (!phoneNumber.trim() && !user.email?.trim()) {
-      Alert.alert('Thiếu thông tin', 'Vui lòng nhập số điện thoại hoặc email.');
+      Alert.alert(t.profileNeedInfoTitle, t.profileNeedPhoneOrEmail);
       return;
     }
 
@@ -1227,12 +1398,12 @@ function ProfileDetailsScreen({
     if (ageTrim.length > 0) {
       const a = Number(ageTrim);
       if (!Number.isFinite(a) || a < 16 || a > 90) {
-        Alert.alert('Độ tuổi', 'Nhập độ tuổi từ 16 đến 90, hoặc để trống.');
+        Alert.alert(t.profileAgeErrTitle, t.profileAgeErrMsg);
         return;
       }
     }
     if (area.trim() && !PROFILE_PROVINCE_SET.has(area.trim())) {
-      Alert.alert('Khu vực', 'Vui lòng chọn tỉnh/thành trong danh sách.');
+      Alert.alert(t.profileAreaErrTitle, t.profileAreaErrMsg);
       return;
     }
 
@@ -1250,11 +1421,11 @@ function ProfileDetailsScreen({
         password: password.trim(),
         avatarUri,
       });
-      Alert.alert('Thành công', 'Thông tin tài khoản đã được cập nhật.');
+      Alert.alert(t.profileSaveOkTitle, t.profileSaveOkMessage);
     } catch (e) {
       const message =
-        e instanceof Error ? e.message.trim() : 'Không lưu được hồ sơ. Vui lòng thử lại.';
-      Alert.alert('Lỗi lưu hồ sơ', message);
+        e instanceof Error ? e.message.trim() : t.profileSaveErrTitle;
+      Alert.alert(t.profileSaveErrTitle, message);
     } finally {
       setIsSaving(false);
     }
@@ -1278,7 +1449,7 @@ function ProfileDetailsScreen({
           <TouchableOpacity style={s.backButton} onPress={onBack} activeOpacity={0.7}>
             <Text style={s.backButtonText}>←</Text>
           </TouchableOpacity>
-          <Text style={s.profileDetailsTitle}>Thông tin tài khoản</Text>
+          <Text style={s.profileDetailsTitle}>{t.profileTitle}</Text>
           <View style={s.headerSpacer} />
         </View>
 
@@ -1296,11 +1467,11 @@ function ProfileDetailsScreen({
         </View>
 
         <View style={s.profileFormCard}>
-          <EditableRow label="Họ và tên">
+          <EditableRow label={t.profileFullName}>
             <TextInput
               value={displayName}
               onChangeText={setDisplayName}
-              placeholder="Nhập họ và tên"
+              placeholder={t.profileFullNamePlaceholder}
               placeholderTextColor="#A0A0A0"
               style={s.profileInput}
               autoCapitalize="words"
@@ -1309,7 +1480,7 @@ function ProfileDetailsScreen({
             />
           </EditableRow>
 
-          <EditableRow label="Khu vực (tỉnh, thành)">
+          <EditableRow label={t.profileArea}>
             <TouchableOpacity
               activeOpacity={0.7}
               onPress={() => {
@@ -1322,46 +1493,46 @@ function ProfileDetailsScreen({
                 style={[s.profileSelectText, !area.trim() && s.profileSelectPlaceholder]}
                 numberOfLines={2}
               >
-                {area.trim() ? area.trim() : 'Chọn tỉnh, thành phố —'}
+                {area.trim() ? area.trim() : t.profileAreaSelect}
               </Text>
             </TouchableOpacity>
           </EditableRow>
 
-          <EditableRow label="Độ tuổi">
+          <EditableRow label={t.profileAge}>
             <TextInput
               value={ageInput}
               onChangeText={(v) => setAgeInput(v.replace(/\D/g, '').slice(0, 2))}
               keyboardType="number-pad"
-              placeholder="Ví dụ: 25"
+              placeholder={t.profileAgePlaceholder}
               placeholderTextColor="#A0A0A0"
               style={s.profileInput}
             />
           </EditableRow>
 
-          <EditableRow label="Số điện thoại">
+          <EditableRow label={t.profilePhone}>
             <TextInput
               value={phoneNumber}
               onChangeText={setPhoneNumber}
               keyboardType="phone-pad"
-              placeholder="Nhập số điện thoại"
+              placeholder={t.profilePhonePlaceholder}
               placeholderTextColor="#A0A0A0"
               style={s.profileInput}
             />
           </EditableRow>
 
-          <EditableRow label="Giới tính">
+          <EditableRow label={t.profileGender}>
             <View style={s.genderChipsRow}>
-              <ChoiceChip label="Nam" active={gender === 'male'} onPress={() => setGender('male')} />
-              <ChoiceChip label="Nữ" active={gender === 'female'} onPress={() => setGender('female')} />
-              <ChoiceChip label="Khác" active={gender === 'other'} onPress={() => setGender('other')} />
+              <ChoiceChip label={t.profileGenderMale} active={gender === 'male'} onPress={() => setGender('male')} />
+              <ChoiceChip label={t.profileGenderFemale} active={gender === 'female'} onPress={() => setGender('female')} />
+              <ChoiceChip label={t.profileGenderOther} active={gender === 'other'} onPress={() => setGender('other')} />
             </View>
           </EditableRow>
 
-          <EditableRow label="Quốc tịch">
+          <EditableRow label={t.profileNationality}>
             <TextInput
               value={nationality}
               onChangeText={setNationality}
-              placeholder="Nhập quốc tịch"
+              placeholder={t.profileNationalityPlaceholder}
               placeholderTextColor="#A0A0A0"
               style={s.profileInput}
               autoCapitalize="words"
@@ -1370,20 +1541,20 @@ function ProfileDetailsScreen({
             />
           </EditableRow>
 
-          <EditableRow label="Xác minh hồ sơ">
+          <EditableRow label={t.profileVerify}>
             <TouchableOpacity
               activeOpacity={0.7}
-              onPress={() => Alert.alert('Thông báo', 'Tính năng xác minh hồ sơ sẽ được cập nhật sau.')}
+              onPress={() => Alert.alert(t.profileVerifyComingTitle, t.profileVerifyComing)}
             >
-              <Text style={s.profileActionText}>Chưa xác minh ›</Text>
+              <Text style={s.profileActionText}>{t.profileVerifyNotYet}</Text>
             </TouchableOpacity>
           </EditableRow>
 
-          <EditableRow label="Đổi mật khẩu" isLast>
+          <EditableRow label={t.profileChangePassword} isLast>
             <TextInput
               value={password}
               onChangeText={setPassword}
-              placeholder="Nhập mật khẩu mới"
+              placeholder={t.profilePasswordPlaceholder}
               placeholderTextColor="#A0A0A0"
               secureTextEntry
               style={s.profileInput}
@@ -1392,7 +1563,7 @@ function ProfileDetailsScreen({
         </View>
 
         <TouchableOpacity style={s.saveProfileButton} onPress={handleSave} activeOpacity={0.85}>
-          <Text style={s.saveProfileButtonText}>{isSaving ? 'Đang lưu...' : 'Lưu thay đổi'}</Text>
+          <Text style={s.saveProfileButtonText}>{isSaving ? t.profileSaving : t.profileSave}</Text>
         </TouchableOpacity>
       </ScrollView>
       </KeyboardAvoidingView>
@@ -1409,11 +1580,11 @@ function ProfileDetailsScreen({
           onPress={() => setShowProvinceModal(false)}
         >
           <View style={s.provinceModalCard} onStartShouldSetResponder={() => true}>
-            <Text style={s.provinceModalTitle}>Chọn tỉnh, thành phố</Text>
+            <Text style={s.provinceModalTitle}>{t.provinceModalTitle}</Text>
             <TextInput
               value={provinceQuery}
               onChangeText={setProvinceQuery}
-              placeholder="Tìm tỉnh, thành phố…"
+              placeholder={t.provinceModalSearch}
               placeholderTextColor="#A0A0A0"
               style={s.provinceModalSearch}
               autoCapitalize="none"
@@ -1445,14 +1616,14 @@ function ProfileDetailsScreen({
                 );
               }}
               ListEmptyComponent={
-                <Text style={s.provinceModalEmpty}>Không tìm thấy tỉnh/thành phù hợp</Text>
+                <Text style={s.provinceModalEmpty}>{t.provinceModalEmpty}</Text>
               }
             />
             <TouchableOpacity
               style={s.provinceModalClose}
               onPress={() => setShowProvinceModal(false)}
             >
-              <Text style={s.provinceModalCloseText}>Đóng</Text>
+              <Text style={s.provinceModalCloseText}>{t.provinceModalClose}</Text>
             </TouchableOpacity>
           </View>
         </TouchableOpacity>

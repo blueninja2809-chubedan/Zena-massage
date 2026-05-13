@@ -1,12 +1,11 @@
 import Feather from '@expo/vector-icons/Feather';
 import { useFocusEffect } from '@react-navigation/native';
 import { Image as ExpoImage } from 'expo-image';
-import { useRouter } from 'expo-router';
+import { Redirect, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  FlatList,
   Image,
   Modal,
   Platform,
@@ -27,11 +26,13 @@ import { ModalSafeAreaProvider } from '@/components/ModalSafeAreaProvider';
 import NotificationScreen from '@/components/NotificationScreen';
 import type { OnboardingLanguage } from '@/components/Onboarding';
 import PromotionsScreen from '@/components/PromotionsScreen';
+import TherapistDetailScreen from '@/components/TherapistDetailScreen';
 import TherapistTopUpScreen from '@/components/TherapistTopUpScreen';
 import WalletScreen from '@/components/WalletScreen';
 import { AppColors } from '@/constants/appColors';
-import { SERVICE_TYPES, VIETNAM_PROVINCES } from '@/constants/bookingFilters';
+import { SERVICE_TYPES, VIETNAM_PROVINCES, getServiceTypeLabel } from '@/constants/bookingFilters';
 import { useActiveBooking } from '@/contexts/ActiveBookingContext';
+import { useBookings } from '@/contexts/BookingsContext';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useNotifications } from '@/contexts/NotificationContext';
 import { useUser } from '@/contexts/UserContext';
@@ -50,6 +51,7 @@ import {
 import { scheduleNonBlockingWork } from '@/lib/scheduleNonBlockingWork';
 import { canUseAppFeatures } from '@/lib/session';
 import { getOrCreateWallet, getTherapists, therapistDisplayImageCandidates } from '@/lib/supabaseService';
+import { getMergedTherapistRating } from '@/lib/therapistRating';
 import type { Therapist } from '@/lib/types';
 import { inferVietnamProvinceFromCoordinates } from '@/lib/vietnamProvinceFromGps';
 
@@ -101,24 +103,13 @@ const translations: Record<OnboardingLanguage, Record<string, string>> = {
     bannerLocDesc: 'Giá tốt, dịch vụ đa dạng,\ncó mặt khắp mọi nơi',
     bannerPromoTitle: 'Ưu đãi hấp dẫn',
     bannerPromoDesc: 'Mã giảm giá phát hành trong app — xem mục Ưu đãi khi có chương trình.',
-    therapistListTitle: 'Kỹ thuật viên đang rảnh',
-    therapistListDesc: 'Chọn kỹ thuật viên để xem giao diện booking',
-    loadingTherapists: 'Đang tải kỹ thuật viên...',
-    noTherapists: 'Chưa có kỹ thuật viên nào khả dụng',
-    available: 'Sẵn sàng',
-    bookNow: 'Đặt ngay',
     support: 'Hỗ trợ',
     supportChannels: 'Kênh hỗ trợ',
     services: 'Dịch vụ',
     offers: 'Ưu đãi',
     upTo50: 'Ưu đãi có thời hạn',
     vip: 'VIP',
-    moreTherapists: 'Nhiều kỹ thuật viên hơn',
     featuredTherapists: 'Kỹ thuật viên nổi bật',
-    seeAll: 'Xem tất cả',
-    age: 'Tuổi',
-    yearsExp: 'năm kinh nghiệm',
-    reviews: 'đánh giá',
     noTherapistsInCity: 'Chưa có kỹ thuật viên tại khu vực đã chọn',
     distanceUpdating: 'Đang cập nhật',
     detectingRegion: 'Đang xác định…',
@@ -135,24 +126,13 @@ const translations: Record<OnboardingLanguage, Record<string, string>> = {
     bannerLocDesc: 'Great prices, diverse services,\navailable everywhere',
     bannerPromoTitle: 'Exciting Offers',
     bannerPromoDesc: 'Promo codes posted in the app — check Offers when campaigns run.',
-    therapistListTitle: 'Available therapists',
-    therapistListDesc: 'Choose a therapist to preview the booking flow',
-    loadingTherapists: 'Loading therapists...',
-    noTherapists: 'No therapists available right now',
-    available: 'Available',
-    bookNow: 'Book now',
     support: 'Support',
     supportChannels: 'Support channels',
     services: 'Services',
     offers: 'Offers',
     upTo50: 'Limited-time offers',
     vip: 'VIP',
-    moreTherapists: 'More therapists',
     featuredTherapists: 'Featured therapists',
-    seeAll: 'See all',
-    age: 'Age',
-    yearsExp: 'years experience',
-    reviews: 'reviews',
     noTherapistsInCity: 'No therapists in selected area',
     distanceUpdating: 'Updating',
     detectingRegion: 'Detecting…',
@@ -181,6 +161,7 @@ export default function HomeScreen() {
   const { language } = useLanguage();
   const { user, setUser, isLoading: authLoading } = useUser();
   const { activeBooking } = useActiveBooking();
+  const { getReviewsForTherapist } = useBookings();
   const router = useRouter();
 
   const promptSignIn = useCallback(() => {
@@ -211,7 +192,6 @@ export default function HomeScreen() {
     [user, authLoading, promptSignIn],
   );
 
-  const [showTherapistModal, setShowTherapistModal] = useState(false);
   const [showMassageHome, setShowMassageHome] = useState(false);
   const [selectedHomeService, setSelectedHomeService] = useState<string | null>(null);
   const [showMassageLocation, setShowMassageLocation] = useState(false);
@@ -220,16 +200,17 @@ export default function HomeScreen() {
   const [showChat, setShowChat] = useState(false);
   const [showTopUp, setShowTopUp] = useState(false);
   const [showWallet, setShowWallet] = useState(false);
+  // Khi user bấm trực tiếp 1 card KTV ở mục "Kỹ thuật viên nổi bật" trên Home
+  // sẽ mở thẳng trang chi tiết KTV (modal full-screen) thay vì màn đặt lịch.
+  const [featuredDetailTherapist, setFeaturedDetailTherapist] = useState<Therapist | null>(null);
   const [autoLocateDone, setAutoLocateDone] = useState(false);
   const [homeSlideIndex, setHomeSlideIndex] = useState(0);
   const [homeBannerWidth, setHomeBannerWidth] = useState(0);
   const homePromoScrollRef = React.useRef<ScrollView | null>(null);
   const { unreadCount: unreadNotifCount, refreshUnreadCount } = useNotifications();
-  const [therapists, setTherapists] = useState<Therapist[]>([]);
   const [featuredTherapists, setFeaturedTherapists] = useState<Therapist[]>([]);
   const [therapistImageFallbackStep, setTherapistImageFallbackStep] = useState<Record<string, number>>({});
   const [loadingFeatured, setLoadingFeatured] = useState(true);
-  const [loadingTherapists, setLoadingTherapists] = useState(false);
   const [balance, setBalance] = useState(0);
   const isVipMember = !!user?.isVipMember;
   const [selectedCity, setSelectedCity] = useState(
@@ -410,7 +391,6 @@ export default function HomeScreen() {
 
   useEffect(() => {
     if (!distanceAnchor) return;
-    setTherapists((prev) => withLiveDistance(prev));
     setFeaturedTherapists((prev) => withLiveDistance(prev));
   }, [distanceAnchor, withLiveDistance]);
 
@@ -477,94 +457,6 @@ export default function HomeScreen() {
     });
   }, [router, selectedCity]);
 
-  const handleOpenTherapists = async () => {
-    if (authLoading) return;
-    if (!canUseAppFeatures(user)) {
-      promptSignIn();
-      return;
-    }
-    setShowTherapistModal(true);
-
-    if (therapists.length > 0 || loadingTherapists) {
-      return;
-    }
-
-    try {
-      setLoadingTherapists(true);
-      const data = await getTherapists({ bypassCache: true });
-      const live = withLiveDistance(data);
-      live.sort((a, b) => {
-        if (a.isAvailable !== b.isAvailable) return a.isAvailable ? -1 : 1;
-        const da = Number.isFinite(a.distanceFromCenter) ? a.distanceFromCenter : Number.POSITIVE_INFINITY;
-        const db = Number.isFinite(b.distanceFromCenter) ? b.distanceFromCenter : Number.POSITIVE_INFINITY;
-        if (da === db) return 0;
-        return da < db ? -1 : 1;
-      });
-      setTherapists(live);
-    } catch (error) {
-      console.error('Error loading therapists from home:', error);
-      setTherapists([]);
-    } finally {
-      setLoadingTherapists(false);
-    }
-  };
-
-  const renderTherapistCard = ({ item }: { item: Therapist }) => {
-    const candidates = therapistDisplayImageCandidates(item);
-    const attempt = therapistImageFallbackStep[item.id] ?? 0;
-    const displayUri = candidates[attempt] ?? '';
-    const hasImageAvatar = attempt < candidates.length && !!displayUri;
-    const distanceText = formatDistanceLabel(item.distanceFromCenter, strings.distanceUpdating);
-
-    return (
-      <TouchableOpacity style={styles.therapistCard} activeOpacity={0.85}>
-        <View style={styles.therapistAvatar}>
-          {hasImageAvatar ? (
-            <Image
-              source={{ uri: displayUri }}
-              style={styles.therapistAvatarImage}
-              onError={() =>
-                setTherapistImageFallbackStep((prev) => ({
-                  ...prev,
-                  [item.id]: (prev[item.id] ?? 0) + 1,
-                }))
-              }
-            />
-          ) : (
-            <Feather name="user" size={24} color={AppColors.primaryDark} />
-          )}
-        </View>
-        <View style={styles.therapistInfo}>
-          <Text style={styles.therapistName}>{item.name}</Text>
-          <View style={styles.therapistMetaRow}>
-            <Feather name="star" size={11} color="#F59E0B" />
-            <Text style={styles.therapistMeta}>{item.rating.toFixed(1)} • {item.reviewCount} {strings.reviews}</Text>
-          </View>
-          <View style={styles.therapistMetaRow}>
-            <Feather name="map-pin" size={11} color={COLORS.lightText} />
-            <Text style={styles.therapistMeta}>{distanceText} • {item.experience} {strings.yearsExp}</Text>
-          </View>
-          {isVipMember ? (
-            <View style={styles.therapistMetaRow}>
-              <Feather name="calendar" size={11} color={COLORS.lightText} />
-              <Text style={styles.therapistMeta}>{strings.age}: {estimateAge(item)}</Text>
-            </View>
-          ) : null}
-          <View style={styles.therapistFooter}>
-            <View style={styles.availableBadge}>
-              <View style={styles.availableDot} />
-              <Text style={styles.availableText}>{strings.available}</Text>
-            </View>
-            <Text style={styles.therapistPrice}>{item.hourlyRate.toLocaleString()}₫/giờ</Text>
-          </View>
-        </View>
-        <TouchableOpacity style={styles.therapistBookButton}>
-          <Text style={styles.therapistBookText}>{strings.bookNow}</Text>
-        </TouchableOpacity>
-      </TouchableOpacity>
-    );
-  };
-
   const cityFeaturedTherapists = useMemo(() => {
     if (!selectedCity) return [];
     const list = featuredTherapists.filter((item) => resolveTherapistCity(item) === selectedCity);
@@ -575,30 +467,19 @@ export default function HomeScreen() {
   }, [featuredTherapists, selectedCity]);
 
   const visibleFeaturedTherapists = useMemo(() => {
-    const capTablet = isVipMember ? 12 : 8;
-    const capPhone = isVipMember ? 10 : 5;
-    const cap = tabletLayout.isTablet ? capTablet : capPhone;
-    return cityFeaturedTherapists.slice(0, cap);
-  }, [cityFeaturedTherapists, isVipMember, tabletLayout.isTablet]);
+    // Khu vực "Kỹ thuật viên nổi bật" trên Home luôn cap cứng 5 KTV ở mọi
+    // breakpoint / hạng thành viên.
+    const FEATURED_HOME_CAP = 5;
+    return cityFeaturedTherapists.slice(0, FEATURED_HOME_CAP);
+  }, [cityFeaturedTherapists]);
 
-  const visibleTherapists = useMemo(
-    () => {
-      if (!selectedCity) {
-        return [];
-      }
-      const byCity = therapists
-        .filter((item) => resolveTherapistCity(item) === selectedCity)
-        .sort((a, b) => {
-          if (a.isAvailable !== b.isAvailable) return a.isAvailable ? -1 : 1;
-          const da = Number.isFinite(a.distanceFromCenter) ? a.distanceFromCenter : Number.POSITIVE_INFINITY;
-          const db = Number.isFinite(b.distanceFromCenter) ? b.distanceFromCenter : Number.POSITIVE_INFINITY;
-          if (da === db) return 0;
-          return da < db ? -1 : 1;
-        });
-      return isVipMember ? byCity : byCity.slice(0, 6);
-    },
-    [therapists, isVipMember, selectedCity],
-  );
+  // Therapists never belong on the customer Home. Without this redirect, opening
+  // the app freshly as a therapist briefly shows MassageHomeScreen (customer UI)
+  // under the therapist tab bar until they tap a different tab. Guarded on
+  // !authLoading so guests / hydrating sessions still see the normal home.
+  if (!authLoading && user?.role === 'therapist') {
+    return <Redirect href="/(tabs)/therapist-schedule" />;
+  }
 
   return (
     <SafeAreaView style={styles.container} edges={['left', 'right', 'bottom']}>
@@ -771,7 +652,9 @@ export default function HomeScreen() {
                 size={tabletLayout.isTablet ? 16 : 14}
                 color={AppColors.primaryDark}
               />
-              <Text style={[styles.tagLabel, tabletLayout.isTablet && styles.tagLabelTablet]}>{tag.label}</Text>
+              <Text style={[styles.tagLabel, tabletLayout.isTablet && styles.tagLabelTablet]}>
+                {getServiceTypeLabel(tag.label, language === 'en')}
+              </Text>
             </TouchableOpacity>
           ))}
         </ScrollView>
@@ -828,11 +711,6 @@ export default function HomeScreen() {
           <Text style={[styles.sectionTitle, tabletLayout.isTablet && styles.sectionTitleTablet]}>
             {strings.featuredTherapists}
           </Text>
-          <TouchableOpacity onPress={handleOpenTherapists}>
-            <Text style={[styles.seeAllLink, tabletLayout.isTablet && styles.seeAllLinkTablet]}>
-              {strings.seeAll} ›
-            </Text>
-          </TouchableOpacity>
         </View>
 
         {loadingFeatured ? (
@@ -854,12 +732,13 @@ export default function HomeScreen() {
               const hasImageAvatar = attempt < candidates.length && !!displayUri;
               const distText = formatDistanceLabel(t.distanceFromCenter, strings.distanceUpdating);
               const avRadius = featuredAvatarSize / 2;
+              const mergedRating = getMergedTherapistRating(t, getReviewsForTherapist(t.id));
               return (
                 <TouchableOpacity
                   key={t.id}
                   style={[styles.featuredCard, styles.featuredCardTablet, { width: featuredGridCardWidth }]}
                   activeOpacity={0.85}
-                  onPress={() => requireAuthTo(() => openMassageHomeWithService(t.specialties?.[0] ?? null))}
+                  onPress={() => requireAuthTo(() => setFeaturedDetailTherapist(t))}
                 >
                   <View style={styles.featuredAvatarWrap}>
                     <View
@@ -901,8 +780,8 @@ export default function HomeScreen() {
                   </Text>
                   <View style={styles.featuredRatingRow}>
                     <Feather name="star" size={12} color="#F59E0B" />
-                    <Text style={[styles.featuredRating, styles.featuredRatingTablet]}>{t.rating.toFixed(1)}</Text>
-                    <Text style={[styles.featuredReviews, styles.featuredReviewsTablet]}>({t.reviewCount})</Text>
+                    <Text style={[styles.featuredRating, styles.featuredRatingTablet]}>{mergedRating.rating.toFixed(1)}</Text>
+                    <Text style={[styles.featuredReviews, styles.featuredReviewsTablet]}>({mergedRating.reviewCount})</Text>
                   </View>
                   <View style={styles.featuredDistanceRow}>
                     <Feather name="map-pin" size={11} color={COLORS.lightText} />
@@ -929,12 +808,13 @@ export default function HomeScreen() {
               const displayUri = candidates[attempt] ?? '';
               const hasImageAvatar = attempt < candidates.length && !!displayUri;
               const distText = formatDistanceLabel(t.distanceFromCenter, strings.distanceUpdating);
+              const mergedRating = getMergedTherapistRating(t, getReviewsForTherapist(t.id));
               return (
                 <TouchableOpacity
                   key={t.id}
                   style={[styles.featuredCard, { width: phoneFeaturedCardWidth }]}
                   activeOpacity={0.85}
-                  onPress={() => requireAuthTo(() => openMassageHomeWithService(t.specialties?.[0] ?? null))}
+                  onPress={() => requireAuthTo(() => setFeaturedDetailTherapist(t))}
                 >
                   <View style={styles.featuredAvatarWrap}>
                     <View style={styles.featuredAvatar}>
@@ -962,8 +842,8 @@ export default function HomeScreen() {
                   <Text style={styles.featuredName} numberOfLines={1}>{t.name}</Text>
                   <View style={styles.featuredRatingRow}>
                     <Feather name="star" size={12} color="#F59E0B" />
-                    <Text style={styles.featuredRating}>{t.rating.toFixed(1)}</Text>
-                    <Text style={styles.featuredReviews}>({t.reviewCount})</Text>
+                    <Text style={styles.featuredRating}>{mergedRating.rating.toFixed(1)}</Text>
+                    <Text style={styles.featuredReviews}>({mergedRating.reviewCount})</Text>
                   </View>
                   <View style={styles.featuredDistanceRow}>
                     <Feather name="map-pin" size={11} color={COLORS.lightText} />
@@ -985,49 +865,6 @@ export default function HomeScreen() {
         </View>
       </ScrollView>
 
-
-      <Modal visible={showTherapistModal} transparent animationType="slide" onRequestClose={() => setShowTherapistModal(false)}>
-        <ModalSafeAreaProvider>
-        <View style={styles.modalContainer}>
-          <View style={styles.therapistModalContent}>
-            <View style={styles.modalHeader}>
-              <View>
-                <Text style={styles.modalTitle}>{strings.therapistListTitle}</Text>
-                <Text style={styles.therapistModalDesc}>{strings.therapistListDesc}</Text>
-              </View>
-              <TouchableOpacity onPress={() => setShowTherapistModal(false)}>
-                <Text style={styles.closeButton}>✕</Text>
-              </TouchableOpacity>
-            </View>
-
-            {loadingTherapists ? (
-              <View style={styles.therapistEmptyState}>
-                <Text style={styles.therapistLoadingText}>{strings.loadingTherapists}</Text>
-              </View>
-            ) : visibleTherapists.length === 0 ? (
-              <View style={styles.therapistEmptyState}>
-                <Feather name="users" size={30} color={AppColors.primaryDark} />
-                <Text style={styles.therapistEmptyText}>
-                  {!selectedCity ? strings.selectRegionHint : strings.noTherapistsInCity}
-                </Text>
-              </View>
-            ) : (
-              <FlatList
-                data={visibleTherapists}
-                keyExtractor={(item) => item.id}
-                renderItem={renderTherapistCard}
-                contentContainerStyle={styles.therapistListContent}
-                showsVerticalScrollIndicator={false}
-                initialNumToRender={8}
-                maxToRenderPerBatch={10}
-                windowSize={7}
-                removeClippedSubviews={Platform.OS === 'android'}
-              />
-            )}
-          </View>
-        </View>
-        </ModalSafeAreaProvider>
-      </Modal>
 
       {/* Massage Home full-screen overlay */}
       <Modal
@@ -1092,14 +929,28 @@ export default function HomeScreen() {
         </ModalSafeAreaProvider>
       </Modal>
 
+      {/* Therapist Detail (mở khi tap card ở "Kỹ thuật viên nổi bật") */}
+      <Modal
+        visible={featuredDetailTherapist !== null}
+        animationType="slide"
+        presentationStyle="fullScreen"
+        hardwareAccelerated
+        onRequestClose={() => setFeaturedDetailTherapist(null)}
+      >
+        <View style={styles.modalContentBg}>
+          {featuredDetailTherapist ? (
+            <ModalSafeAreaProvider>
+              <TherapistDetailScreen
+                therapist={featuredDetailTherapist}
+                onClose={() => setFeaturedDetailTherapist(null)}
+              />
+            </ModalSafeAreaProvider>
+          ) : null}
+        </View>
+      </Modal>
+
     </SafeAreaView>
   );
-}
-
-function estimateAge(item: Therapist) {
-  const base = 21 + item.experience;
-  const hash = item.id.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0);
-  return base + (hash % 5);
 }
 
 const styles = StyleSheet.create({
@@ -1291,14 +1142,6 @@ const styles = StyleSheet.create({
   sectionTitleTablet: {
     fontSize: 22,
     marginBottom: 2,
-  },
-  seeAllLink: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: COLORS.primary,
-  },
-  seeAllLinkTablet: {
-    fontSize: 16,
   },
 
   // --- Grid Layout ---
@@ -1636,48 +1479,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
 
-  // --- Modal ---
-  modalContainer: {
-    flex: 1,
-    backgroundColor: 'rgba(60, 45, 35, 0.38)',
-    justifyContent: 'flex-end',
-  },
-  modalContent: {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    maxHeight: '80%',
-  },
-  therapistModalContent: {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    maxHeight: '86%',
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.light,
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: COLORS.text,
-  },
-  therapistModalDesc: {
-    marginTop: 4,
-    fontSize: 13,
-    color: COLORS.lightText,
-  },
-  closeButton: {
-    fontSize: 24,
-    color: COLORS.lightText,
-    fontWeight: '400',
-  },
   supportChannelItem: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1710,111 +1511,6 @@ const styles = StyleSheet.create({
   },
   supportChevron: {
     fontSize: 18,
-    color: COLORS.lightText,
-  },
-  therapistListContent: {
-    paddingHorizontal: 16,
-    paddingBottom: 24,
-  },
-  therapistCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: AppColors.white,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: AppColors.border,
-    padding: 14,
-    marginBottom: 12,
-    shadowColor: '#0A2540',
-    shadowOpacity: 0.05,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 2,
-  },
-  therapistAvatar: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: AppColors.primarySoft2,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-  },
-  therapistAvatarImage: {
-    width: '100%',
-    height: '100%',
-    borderRadius: 28,
-  },
-  therapistInfo: {
-    flex: 1,
-  },
-  therapistName: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: COLORS.text,
-    marginBottom: 4,
-  },
-  therapistMeta: {
-    fontSize: 12,
-    color: COLORS.lightText,
-  },
-  therapistMetaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    marginBottom: 2,
-  },
-  therapistFooter: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: 8,
-  },
-  availableBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: AppColors.accentSoft,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 12,
-    gap: 6,
-  },
-  availableDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: AppColors.accent,
-  },
-  availableText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: AppColors.primaryDark,
-  },
-  therapistPrice: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: COLORS.primary,
-  },
-  therapistBookButton: {
-    backgroundColor: COLORS.primary,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 14,
-    marginLeft: 12,
-  },
-  therapistBookText: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  therapistEmptyState: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 24,
-    paddingVertical: 40,
-  },
-  therapistLoadingText: {
-    fontSize: 14,
     color: COLORS.lightText,
   },
   therapistEmptyText: {

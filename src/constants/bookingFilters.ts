@@ -13,6 +13,30 @@ export const SERVICE_TYPES = [
   'Lấy ráy tai',
 ] as const;
 
+/**
+ * Hiển thị tên dịch vụ bằng tiếng Anh. VI vẫn là canonical key (dùng để
+ * filter / so sánh nội bộ). EN chỉ phục vụ render khi `language === 'en'`.
+ */
+export const SERVICE_TYPE_LABEL_EN: Record<string, string> = {
+  'Tất cả': 'All',
+  'Massage Dầu + Giác Hơi': 'Oil massage + cupping',
+  'Massage Đá Nóng': 'Hot stone massage',
+  'Massage Thái': 'Thai massage',
+  'Massage Aroma': 'Aroma massage',
+  'Massage Chân': 'Foot massage',
+  'Massage Cổ Vai Gáy': 'Neck & shoulder massage',
+  'Massage Dầu': 'Oil massage',
+  'Massage Không Dầu': 'Dry massage',
+  'Wax Bikini': 'Bikini wax',
+  'Tắm tẩy tế bào chết toàn thân Hàn Quốc': 'Korean full-body exfoliation',
+  'Lấy ráy tai': 'Ear cleaning',
+};
+
+export function getServiceTypeLabel(service: string, isEn: boolean): string {
+  if (!isEn) return service;
+  return SERVICE_TYPE_LABEL_EN[service] ?? service;
+}
+
 export const DEFAULT_CITY = 'Hà Nội';
 
 export const VIETNAM_PROVINCES = [

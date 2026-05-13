@@ -1,5 +1,8 @@
 import {
+  checkTherapistHasActiveBooking,
   checkTherapistMinBalance,
+  getOrCreateChatRoom,
+  getOrCreateWallet,
   getSharedBookingRecordById,
   markNotificationAsRead,
   therapistApplyToBroadcastBooking,
@@ -35,6 +38,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
 import { useBookings } from './BookingsContext';
 import { useLanguage } from './LanguageContext';
 import { useUser } from './UserContext';
@@ -76,12 +80,17 @@ interface NotificationContextType {
   unreadCount: number;
   /** Manually refresh the unread count */
   refreshUnreadCount: () => void;
+  /** bookingId to open chat immediately after therapist accepts a job */
+  pendingChatBookingId: string | null;
+  clearPendingChatBooking: () => void;
 }
 
 const NotificationContext = createContext<NotificationContextType>({
   expoPushToken: null,
   unreadCount: 0,
   refreshUnreadCount: () => {},
+  pendingChatBookingId: null,
+  clearPendingChatBooking: () => {},
 });
 
 type IncomingNotificationRow = {
@@ -277,6 +286,8 @@ async function savePushTokenToProfile(uid: string, token: string) {
   });
   if (error) {
     console.warn('[Notifications] Failed to save push token:', error.message);
+  } else {
+    if (__DEV__) console.log('[Notifications] Push token saved for uid:', uid, 'token:', token.slice(0, 30));
   }
 }
 
@@ -392,11 +403,13 @@ export function NotificationProvider({
   const { language } = useLanguage();
   const langUi = language === 'en' ? 'en' : 'vi';
   const { refreshBookings, updateStatus } = useBookings();
+  const router = useRouter();
   const [expoPushToken, setExpoPushToken] = useState<string | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
   const [banner, setBanner] = useState<InAppBanner | null>(null);
   const [jobOffer, setJobOffer] = useState<JobOfferState | null>(null);
   const [jobOfferBusy, setJobOfferBusy] = useState(false);
+  const [pendingChatBookingId, setPendingChatBookingId] = useState<string | null>(null);
 
   const notificationListener = useRef<{ remove: () => void } | null>(null);
   const responseListener = useRef<{ remove: () => void } | null>(null);
@@ -445,17 +458,39 @@ export function NotificationProvider({
     [refreshBookings, refreshUnreadCount],
   );
 
+  const MIN_APPLY_BALANCE = 500_000;
+
   const handleJobApply = useCallback(async () => {
     if (!jobOffer || !user?.authUid) return;
     setJobOfferBusy(true);
     try {
-      const okWallet = await checkTherapistMinBalance(user.authUid, 0);
-      if (!okWallet) {
+      const hasActive = await checkTherapistHasActiveBooking(user.authUid);
+      if (hasActive) {
         Alert.alert(
-          langUi === 'en' ? 'Cannot accept job' : 'Chưa thể nhận đơn',
+          langUi === 'en' ? 'Active booking in progress' : 'Đang có đơn hàng thực hiện',
           langUi === 'en'
-            ? 'Check connection fee and minimum balance. Use Top up.'
-            : 'Kiểm tra phí kết nối và số dư tối thiểu. Vào Nạp tiền.',
+            ? 'You already have an active booking. Please complete it before accepting a new one.'
+            : 'Bạn đang có 1 đơn hàng chưa hoàn thành. Vui lòng hoàn thành đơn hàng hiện tại trước khi nhận đơn mới.',
+        );
+        return;
+      }
+      const okWallet = await checkTherapistMinBalance(user.authUid, MIN_APPLY_BALANCE);
+      if (!okWallet) {
+        const wallet = await getOrCreateWallet(user.authUid).catch(() => null);
+        const current = wallet?.balance ?? 0;
+        const needed = MIN_APPLY_BALANCE - current;
+        Alert.alert(
+          langUi === 'en' ? 'Insufficient balance' : 'Số dư ví không đủ',
+          langUi === 'en'
+            ? `Your balance is ${current.toLocaleString()} ₫. You need at least 500,000 ₫ to apply. Please top up ${needed.toLocaleString()} ₫ more.`
+            : `Số dư hiện tại của bạn là ${current.toLocaleString('vi-VN')} ₫. Cần tối thiểu 500.000 ₫ để ứng tuyển. Vui lòng nạp thêm ${needed.toLocaleString('vi-VN')} ₫.`,
+          [
+            { text: langUi === 'en' ? 'Cancel' : 'Đóng', style: 'cancel' },
+            {
+              text: langUi === 'en' ? 'Top up now' : 'Nạp tiền ngay',
+              onPress: () => router.push('/therapist-topup'),
+            },
+          ],
         );
         return;
       }
@@ -505,6 +540,20 @@ export function NotificationProvider({
         updateStatus(jobOffer.bookingId, 'confirmed');
       }
       await finalizeJobOffer(jobOffer.notificationId);
+      // Tạo chat room ngay sau khi accept và kích hoạt mở chat
+      const bookingId = jobOffer.bookingId;
+      const row2 = await getSharedBookingRecordById(bookingId).catch(() => null);
+      if (row2) {
+        const customerId = String(row2.customerUserId ?? '');
+        const therapistId = user.authUid;
+        if (customerId && therapistId) {
+          await getOrCreateChatRoom(
+            bookingId, customerId, therapistId,
+            String(row2.customerName ?? ''), String(row2.therapistName ?? ''),
+          ).catch(() => {});
+          setPendingChatBookingId(bookingId);
+        }
+      }
     } finally {
       setJobOfferBusy(false);
     }
@@ -580,6 +629,7 @@ export function NotificationProvider({
         const data = notification.request.content.data as Record<string, unknown> | undefined;
         const relatedId = typeof data?.relatedId === 'string' ? data.relatedId.trim() : '';
         const isJobPayload = data?.type === 'job' && relatedId.length > 0;
+        if (__DEV__) console.log('[Notification] Received foreground:', { title, body, type: data?.type, role: user?.role });
 
         if (user?.role === 'therapist' && isJobPayload) {
           setJobOffer({
@@ -707,7 +757,13 @@ export function NotificationProvider({
 
   return (
     <NotificationContext.Provider
-      value={{ expoPushToken, unreadCount, refreshUnreadCount }}
+      value={{
+        expoPushToken,
+        unreadCount,
+        refreshUnreadCount,
+        pendingChatBookingId,
+        clearPendingChatBooking: () => setPendingChatBookingId(null),
+      }}
     >
       {children}
       {banner && !jobOffer ? (

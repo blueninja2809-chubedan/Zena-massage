@@ -563,22 +563,38 @@ export async function filterTherapistsEligibleForBookingNow(therapists: Therapis
  * - Đã có ít nhất một KTV đăng ký ca hôm nay: KTV này phải có dòng ca + slot + trong giờ (KTV ảo: lịch demo).
  */
 export async function therapistEligibleForInstantBookNow(therapistId: string): Promise<boolean> {
-  const therapist = await getTherapistById(therapistId);
-  if (!therapist?.isAvailable) return false;
+  if (isVirtualTherapistId(therapistId)) {
+    const therapist = await getTherapistById(therapistId);
+    if (!therapist) return false;
+    const [ok] = await filterTherapistsEligibleForBookingNow([therapist]);
+    return Boolean(ok);
+  }
+
+  // Check raw DB is_available (not the shift-computed cache value) via SECURITY DEFINER RPC
+  let rawIsAvailable = false;
+  try {
+    const { data: rawList } = await withTimeout(supabase.rpc('get_all_therapists_public'));
+    if (Array.isArray(rawList)) {
+      // RPC only returns therapists with is_available=true, so presence = available
+      rawIsAvailable = (rawList as JsonObject[]).some(
+        (r) => normalizeTherapistId(String(r.id ?? '')) === normalizeTherapistId(therapistId),
+      );
+    }
+  } catch {
+    // RPC not available — fallback to cached therapist
+    const therapist = await getTherapistById(therapistId);
+    rawIsAvailable = Boolean(therapist?.isAvailable);
+  }
+  if (!rawIsAvailable) return false;
 
   const today = getLocalDateString();
   const rows = await getTherapistShiftsForDate(today).catch(() => []);
-  if (rows.length === 0) {
-    return true;
-  }
+  if (rows.length === 0) return true;
 
   const mine = rows.find((r) => normalizeTherapistId(r.userId) === normalizeTherapistId(therapistId));
   if (!mine) {
-    if (isVirtualTherapistId(therapistId)) {
-      const [ok] = await filterTherapistsEligibleForBookingNow([therapist]);
-      return Boolean(ok);
-    }
-    return false;
+    // KTV bật isAvailable nhưng chưa đăng ký ca → cho đặt (24/7)
+    return true;
   }
 
   const slots = mine.slots ?? [];
@@ -858,6 +874,18 @@ export async function signOutUserAccount(): Promise<void> {
  * SERVICES
  */
 export async function getServices(): Promise<Service[]> {
+  // Try SECURITY DEFINER RPC first to bypass RLS (custom auth has no auth.uid())
+  try {
+    const { data: rpcData, error: rpcError } = await withTimeout(
+      supabase.rpc('get_all_services_public'),
+    );
+    if (!rpcError && Array.isArray(rpcData)) {
+      return (rpcData as JsonObject[]).map((row: JsonObject) => mapService(row));
+    }
+  } catch {
+    // ignore, fall through
+  }
+
   const { data, error } = await withTimeout(
     supabase.from('services').select('*').eq('is_active', true),
   );
@@ -916,23 +944,24 @@ async function applyTherapistShiftAvailabilityForToday(hydrated: Therapist[]): P
 }
 
 async function fetchTherapistsUncached(): Promise<Therapist[]> {
-  // First try RPC that filters by minimum wallet balance (500,000đ)
+  // Primary: fetch ALL is_available=true therapists regardless of wallet balance.
+  // Wallet balance check is for job dispatch only, not for display.
   try {
     const { data: rpcData, error: rpcError } = await withTimeout(
-      supabase.rpc('get_available_therapists_with_min_balance', { p_min_balance: 500000 }),
+      supabase.rpc('get_all_therapists_public'),
     );
-    if (!rpcError && Array.isArray(rpcData) && rpcData.length > 0) {
+    if (!rpcError && Array.isArray(rpcData)) {
       const mapped = (rpcData as JsonObject[]).map((row: JsonObject) => mapTherapist(row));
       const hydrated = await hydrateTherapistAvatarsFromProfiles(mapped);
       return applyTherapistShiftAvailabilityForToday(hydrated);
     }
   } catch {
-    // Fallback to basic query
+    // Fallback to direct query
   }
 
-  // Fallback: get all therapists, then compute real-time availability from registered shifts.
+  // Last resort: direct table query (may fail with RLS on some environments).
   const { data, error } = await withTimeout(
-    supabase.from('therapists').select('*'),
+    supabase.from('therapists').select('*').eq('is_available', true),
   );
   if (error || !data) {
     warnCatalogPermissionOnce(error);
@@ -971,6 +1000,23 @@ export async function getTherapistById(therapistId: string): Promise<Therapist |
   if (virtual) {
     return virtual;
   }
+
+  // Try cache first (already fetched via SECURITY DEFINER RPC, bypasses RLS)
+  if (therapistsCache) {
+    const cached = therapistsCache.list.find((t) => t.id === therapistId);
+    if (cached) return cached;
+  }
+
+  // Try fetching full list (uses RPC fallback) then find by ID
+  try {
+    const all = await getTherapists();
+    const found = all.find((t) => t.id === therapistId);
+    if (found) return found;
+  } catch {
+    // ignore
+  }
+
+  // Last resort: direct query (may fail with RLS)
   const { data, error } = await withTimeout(
     supabase.from('therapists').select('*').eq('id', therapistId).maybeSingle(),
   );
@@ -1057,12 +1103,12 @@ export async function getBookingsByUserId(userId: string): Promise<Booking[]> {
 
 export async function getBookingById(bookingId: string): Promise<Booking | null> {
   const { data, error } = await withTimeout(
-    supabase.from('bookings').select('*').eq('id', bookingId).maybeSingle(),
+    supabase.rpc('get_booking_by_id_rpc', { p_booking_id: bookingId }),
   );
-  if (error || !data) {
-    return null;
-  }
-  return payloadToRecord(data as JsonObject) as unknown as Booking;
+  if (error || !data) return null;
+  const row = Array.isArray(data) ? data[0] : data;
+  if (!row) return null;
+  return payloadToRecord(row as JsonObject) as unknown as Booking;
 }
 
 export async function updateBookingStatus(bookingId: string, status: Booking['status']): Promise<void> {
@@ -1083,26 +1129,27 @@ export async function createSharedBookingRecord(data: Record<string, unknown>): 
     basePayload.paymentMethod !== undefined
       ? { ...basePayload, paymentMethod: mapGlowPaymentMethodIdToZenaUnknown(basePayload.paymentMethod) }
       : basePayload;
-  const { data: row, error } = await withTimeout(
-    supabase
-      .from('bookings')
-      .insert({
-        user_id: userId,
-        therapist_id: String(data.therapistId ?? ''),
-        status: String(data.status ?? 'pending'),
-        payload,
-      })
-      .select('id')
-      .single(),
+  const { data: bookingId, error } = await withTimeout(
+    supabase.rpc('create_booking_rpc', {
+      p_user_id: userId,
+      p_therapist_id: String(data.therapistId ?? ''),
+      p_status: String(data.status ?? 'pending'),
+      p_payload: payload,
+    }),
   );
-  if (error || !row) {
+  if (error || !bookingId) {
+    console.warn('[createSharedBookingRecord] error:', error?.message, error?.code);
     throw error ?? new Error('create-shared-booking-failed');
   }
-  return String(row.id);
+  console.log('[createSharedBookingRecord] success, id=', bookingId);
+  return String(bookingId);
 }
 
 export async function deleteBookingRecord(bookingId: string): Promise<void> {
-  const { error } = await withTimeout(supabase.from('bookings').delete().eq('id', bookingId));
+  console.warn('[deleteBookingRecord] CALLED for id=', bookingId, new Error().stack?.split('\n')[2]);
+  const { error } = await withTimeout(
+    supabase.rpc('delete_booking_rpc', { p_booking_id: bookingId }),
+  );
   if (error) throw error;
 }
 
@@ -1112,25 +1159,18 @@ export async function mergeBookingPayload(
   patch: Record<string, unknown>,
   status?: string,
 ): Promise<void> {
-  const { data: row, error: e1 } = await withTimeout(
-    supabase.from('bookings').select('payload').eq('id', bookingId).maybeSingle(),
-  );
-  if (e1) throw e1;
-  const prev =
-    row && typeof row.payload === 'object' && row.payload !== null
-      ? (row.payload as Record<string, unknown>)
-      : {};
   const patchNorm = { ...patch };
   if ('paymentMethod' in patchNorm) {
     patchNorm.paymentMethod = mapGlowPaymentMethodIdToZenaUnknown(patchNorm.paymentMethod);
   }
-  const update: Record<string, unknown> = {
-    payload: { ...prev, ...patchNorm },
-    updated_at: new Date().toISOString(),
-  };
-  if (status) update.status = status;
-  const { error: e2 } = await withTimeout(supabase.from('bookings').update(update).eq('id', bookingId));
-  if (e2) throw e2;
+  const { error } = await withTimeout(
+    supabase.rpc('merge_booking_payload_rpc', {
+      p_booking_id: bookingId,
+      p_patch: patchNorm,
+      p_status: status ?? null,
+    }),
+  );
+  if (error) throw error;
 }
 
 /** Client confirms PayOS after polling PAID (webhook may have already completed the row). */
@@ -1154,18 +1194,32 @@ export async function confirmPayosForBookingUser(
 }
 
 export async function getBookingStatus(bookingId: string): Promise<string | null> {
-  const { data, error } = await withTimeout(
-    supabase.from('bookings').select('status').eq('id', bookingId).maybeSingle(),
-  );
-  if (error || !data) return null;
-  return data.status != null ? String(data.status) : null;
+  const row = await getSharedBookingRecordById(bookingId);
+  if (!row) return null;
+  return row.status != null ? String(row.status) : null;
 }
 
 export async function getSharedBookingRecords(): Promise<(Record<string, unknown> & { id: string })[]> {
+  // Try SECURITY DEFINER RPC first (bypasses RLS for custom-auth anon clients)
+  try {
+    const { data: rpcData, error: rpcError } = await withTimeout(
+      supabase.rpc('get_all_bookings_for_app'),
+    );
+    if (!rpcError && Array.isArray(rpcData)) {
+      return (rpcData as JsonObject[]).map((row) => payloadToRecord(row));
+    }
+    if (rpcError) {
+      console.warn('[getSharedBookingRecords] RPC error:', rpcError.message);
+    }
+  } catch {
+    // fall through to direct query
+  }
+
   const { data, error } = await withTimeout(
     supabase.from('bookings').select('*').order('created_at', { ascending: false }),
   );
   if (error || !data) {
+    console.warn('[getSharedBookingRecords] error:', error?.message, error?.code);
     return [];
   }
   return (data as JsonObject[]).map((row: JsonObject) => payloadToRecord(row)) as (Record<string, unknown> & {
@@ -1177,21 +1231,23 @@ export async function getSharedBookingRecordById(
   bookingId: string,
 ): Promise<(Record<string, unknown> & { id: string }) | null> {
   const { data, error } = await withTimeout(
-    supabase.from('bookings').select('*').eq('id', bookingId).maybeSingle(),
+    supabase.rpc('get_booking_by_id_rpc', { p_booking_id: bookingId }),
   );
   if (error || !data) {
     return null;
   }
-  return payloadToRecord(data as JsonObject) as Record<string, unknown> & { id: string };
+  const row = Array.isArray(data) ? data[0] : data;
+  if (!row) return null;
+  return payloadToRecord(row as JsonObject) as Record<string, unknown> & { id: string };
 }
 
 export async function updateSharedBookingStatus(bookingId: string, status: string): Promise<void> {
   const { error } = await withTimeout(
-    supabase.from('bookings').update({ status }).eq('id', bookingId),
+    supabase.rpc('update_booking_status_rpc', { p_booking_id: bookingId, p_status: status }),
   );
-  if (error) {
-    throw error;
-  }
+  if (!error) return;
+  // Fallback: update via merge_booking_payload_rpc (guaranteed to exist)
+  await mergeBookingPayload(bookingId, {}, status);
 }
 
 /**
@@ -1540,7 +1596,7 @@ export async function getSharedReviewRecords(): Promise<(Record<string, unknown>
  */
 export async function getSavedAddresses(userId: string): Promise<SavedAddress[]> {
   const { data, error } = await withTimeout(
-    supabase.from('addresses').select('*').eq('user_id', userId),
+    supabase.rpc('get_saved_addresses', { p_user_id: userId }),
   );
   if (error || !data) {
     return [];
@@ -1549,20 +1605,17 @@ export async function getSavedAddresses(userId: string): Promise<SavedAddress[]>
 }
 
 export async function addSavedAddress(addressData: Omit<SavedAddress, 'id'>): Promise<string> {
+  const payload = { ...addressData, createdAt: addressData.createdAt ?? new Date().toISOString() };
   const { data, error } = await withTimeout(
-    supabase
-      .from('addresses')
-      .insert({
-        user_id: addressData.userId,
-        payload: { ...addressData, createdAt: addressData.createdAt ?? new Date().toISOString() },
-      })
-      .select('id')
-      .single(),
+    supabase.rpc('add_saved_address', {
+      p_user_id: addressData.userId,
+      p_payload: payload,
+    }),
   );
   if (error || !data) {
     throw error ?? new Error('add-address-failed');
   }
-  return String(data.id);
+  return String(data);
 }
 
 export async function deleteSavedAddress(addressId: string): Promise<void> {
@@ -1798,8 +1851,8 @@ export async function completeTherapistBookingPayouts(
       balance: Number(result.balance ?? 0),
     };
   } catch {
-    // DB chưa migrate: vẫn cộng 100% vào ví chính (không có Ví Chi phí).
-    return creditTherapistEarning(therapistUserId, bookingId, totalAmount, 1);
+    // RPC not yet migrated — no-op; do not credit earnings to wallet.
+    return { transactionId: '', earningAmount: 0, balance: 0 };
   }
 }
 
@@ -1970,11 +2023,11 @@ export async function createNotification(notificationData: Omit<Notification, 'i
   }
 
   const { error } = await withTimeout(
-    supabase.from('notifications').insert({
-      user_id: notificationData.userId,
-      is_read: notificationData.isRead ?? false,
-      payload: notificationData,
-      created_at: notificationData.createdAt ?? new Date().toISOString(),
+    supabase.rpc('insert_notification', {
+      p_user_id: notificationData.userId,
+      p_payload: notificationData as unknown as Record<string, unknown>,
+      p_is_read: notificationData.isRead ?? false,
+      p_created_at: notificationData.createdAt ?? new Date().toISOString(),
     }),
   );
   if (error) {
@@ -1996,17 +2049,45 @@ export async function markNotificationAsRead(notificationId: string): Promise<vo
  * NOTIFICATION HELPERS
  */
 
-/** Get all therapist profile IDs in a given city */
+/** Get all therapist profile IDs in a given city (flexible matching — handles Vietnamese diacritics).
+ *  Uses SECURITY DEFINER RPC to avoid direct table permission issues. */
 export async function getTherapistIdsByCity(city: string): Promise<string[]> {
-  const { data, error } = await withTimeout(
-    supabase
-      .from('profiles')
-      .select('id')
-      .eq('role', 'therapist')
-      .eq('working_city', city),
+  // Try SECURITY DEFINER RPC first (bypasses table-level permission issues)
+  const { data: rpcData, error: rpcError } = await withTimeout(
+    supabase.rpc('get_therapists_with_push_tokens'),
   );
-  if (error || !data) return [];
-  return (data as { id: string }[]).map((r) => r.id);
+
+  let rows: { id: string; working_city: string | null }[] = [];
+
+  if (!rpcError && Array.isArray(rpcData)) {
+    rows = rpcData as { id: string; working_city: string | null }[];
+  } else {
+    // Fallback: direct table query (works when GRANT SELECT on profiles is in place)
+    if (__DEV__) console.warn('[getTherapistIdsByCity] RPC failed, trying direct query:', rpcError?.message);
+    const { data, error } = await withTimeout(
+      supabase
+        .from('profiles')
+        .select('id, working_city')
+        .eq('role', 'therapist')
+        .not('push_token', 'is', null),
+    );
+    if (error || !data) {
+      if (__DEV__) console.warn('[getTherapistIdsByCity] direct query also failed:', error?.message);
+      return [];
+    }
+    rows = data as { id: string; working_city: string | null }[];
+  }
+
+  const cityLower = city.trim().toLowerCase();
+  const matched = rows
+    .filter((r) => {
+      const wc = (r.working_city ?? '').trim().toLowerCase();
+      if (!wc || !cityLower) return false;
+      return wc.includes(cityLower) || cityLower.includes(wc);
+    })
+    .map((r) => r.id);
+  if (__DEV__) console.log('[getTherapistIdsByCity] city:', city, '→ found', matched.length, 'of', rows.length, 'therapists with push tokens');
+  return matched;
 }
 
 /** Send booking confirmation notification to customer */
@@ -2099,13 +2180,13 @@ export async function notifyNewJobForCity(
   }
 
   // 2) Insert notifications DB cho lịch sử & realtime modal.
+  const now = new Date().toISOString();
   await Promise.all(
     targets.map((therapistUserId) =>
       withTimeout(
-        supabase.from('notifications').insert({
-          user_id: therapistUserId,
-          is_read: false,
-          payload: {
+        supabase.rpc('insert_notification', {
+          p_user_id: therapistUserId,
+          p_payload: {
             userId: therapistUserId,
             title,
             titleEn: `New Job in ${city}`,
@@ -2114,9 +2195,10 @@ export async function notifyNewJobForCity(
             type: 'job',
             relatedId: bookingId,
             isRead: false,
-            createdAt: new Date().toISOString(),
+            createdAt: now,
           },
-          created_at: new Date().toISOString(),
+          p_is_read: false,
+          p_created_at: now,
         }),
       ).catch(() => {}),
     ),
@@ -2149,12 +2231,13 @@ type JsonBookingPayload = Record<string, unknown>;
 
 async function readBookingPayload(bookingId: string): Promise<JsonBookingPayload | null> {
   const { data, error } = await withTimeout(
-    supabase.from('bookings').select('payload').eq('id', bookingId).maybeSingle(),
+    supabase.rpc('get_booking_by_id_rpc', { p_booking_id: bookingId }),
   );
-  if (error || !data || typeof data.payload !== 'object' || data.payload === null) {
+  const row = Array.isArray(data) ? data[0] : data;
+  if (error || !row || typeof row.payload !== 'object' || row.payload === null) {
     return null;
   }
-  return data.payload as JsonBookingPayload;
+  return row.payload as JsonBookingPayload;
 }
 
 export async function therapistPrimaryAcceptBooking(
@@ -2242,7 +2325,10 @@ export async function therapistApplyToBroadcastBooking(
     return { ok: false, reason: 'not_broadcast' };
   }
   const requested = String(prev.requestedTherapistId ?? '');
-  if (requested === therapistUid) {
+  const primaryAction = String(prev.primaryAction ?? '');
+  // Block only while nomination is still active — KTV must use Accept/Decline buttons.
+  // If nomination expired (timeout) or was declined, allow re-applying via broadcast.
+  if (requested === therapistUid && (!primaryAction || primaryAction === 'pending')) {
     return { ok: false, reason: 'use_accept_decline' };
   }
   const rawApps = prev.applications;
@@ -2803,8 +2889,21 @@ export async function checkTherapistMinBalance(userId: string, minBalance: numbe
   const { data, error } = await withTimeout(
     supabase.rpc('check_therapist_min_balance', { p_user_id: userId, p_min_balance: minBalance }),
   );
-  if (error) return false;
+  if (error) throw error;
   return Boolean(data);
+}
+
+/** Server-side guard: KTV đang có đơn confirmed/in-progress chưa hoàn thành? */
+export async function checkTherapistHasActiveBooking(userId: string): Promise<boolean> {
+  try {
+    const { data, error } = await withTimeout(
+      supabase.rpc('check_therapist_has_active_booking', { p_user_id: userId }),
+    );
+    if (error) return false; // RPC chưa migrate → không chặn
+    return Boolean(data);
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -3064,24 +3163,18 @@ export async function getOrCreateChatRoom(
 /** Get an existing chat room by booking ID */
 export async function getChatRoomByBooking(bookingId: string): Promise<ChatRoom | null> {
   const { data, error } = await withTimeout(
-    supabase
-      .from('chat_rooms')
-      .select('*')
-      .eq('booking_id', bookingId)
-      .single(),
+    supabase.rpc('get_chat_room_by_booking', { p_booking_id: bookingId }),
   );
   if (error || !data) return null;
-  return mapChatRoom(data as Record<string, unknown>);
+  const row = Array.isArray(data) ? data[0] : data;
+  if (!row) return null;
+  return mapChatRoom(row as Record<string, unknown>);
 }
 
 /** Get all chat rooms for a user (customer or therapist) */
 export async function getChatRoomsForUser(userId: string): Promise<ChatRoom[]> {
   const { data, error } = await withTimeout(
-    supabase
-      .from('chat_rooms')
-      .select('*')
-      .or(`customer_id.eq.${userId},therapist_id.eq.${userId}`)
-      .order('updated_at', { ascending: false }),
+    supabase.rpc('get_chat_rooms_for_user', { p_user_id: userId }),
   );
   if (error || !data) return [];
   return (data as Record<string, unknown>[]).map(mapChatRoom);
@@ -3115,12 +3208,7 @@ export async function getChatMessages(
   offset: number = 0,
 ): Promise<ChatMessage[]> {
   const { data, error } = await withTimeout(
-    supabase
-      .from('chat_messages')
-      .select('*')
-      .eq('room_id', roomId)
-      .order('created_at', { ascending: true })
-      .range(offset, offset + limit - 1),
+    supabase.rpc('get_chat_messages_rpc', { p_room_id: roomId, p_limit: limit, p_offset: offset }),
   );
   if (error || !data) return [];
   return (data as Record<string, unknown>[]).map(mapChatMessage);
@@ -3137,25 +3225,16 @@ export async function markChatMessagesRead(roomId: string, readerId: string): Pr
   if (error) throw error;
 }
 
-/** Subscribe to new messages in a room (Supabase Realtime) */
+/** Subscribe to new messages via Supabase Broadcast (no RLS issues). */
 export function subscribeToChatMessages(
   roomId: string,
   onNewMessage: (msg: ChatMessage) => void,
 ) {
   const channel = supabase
-    .channel(`chat:${roomId}`)
-    .on(
-      'postgres_changes',
-      {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'chat_messages',
-        filter: `room_id=eq.${roomId}`,
-      },
-      (payload) => {
-        onNewMessage(mapChatMessage(payload.new as Record<string, unknown>));
-      },
-    )
+    .channel(`chat-bc:${roomId}`, { config: { broadcast: { self: false } } })
+    .on('broadcast', { event: 'msg' }, ({ payload }) => {
+      if (payload?.msg) onNewMessage(payload.msg as ChatMessage);
+    })
     .subscribe();
 
   return () => {
@@ -3163,13 +3242,36 @@ export function subscribeToChatMessages(
   };
 }
 
+/** Broadcast a new message to the room channel so the other party sees it instantly. */
+export async function broadcastChatMessage(roomId: string, msg: ChatMessage): Promise<void> {
+  const channel = supabase.channel(`chat-bc:${roomId}`);
+  await channel.send({ type: 'broadcast', event: 'msg', payload: { msg } });
+}
+
+/**
+ * Xóa chat_room (và chat_messages qua ON DELETE CASCADE) theo booking_id.
+ * Ưu tiên RPC SECURITY DEFINER (migration 063) để không phụ thuộc RLS;
+ * nếu RPC không tồn tại (chưa apply migration) thì fallback xóa trực tiếp.
+ * Lỗi cleanup ở mức best-effort — caller có thể `.catch(() => {})`.
+ */
 export async function deleteChatRoomByBooking(bookingId: string): Promise<void> {
+  const { error: rpcError } = await withTimeout(
+    supabase.rpc('delete_chat_room_by_booking', { p_booking_id: bookingId }),
+  );
+  if (!rpcError) return;
+
+  // Fallback: project chưa apply migration 063 → dùng cách cũ.
+  const code = (rpcError as { code?: string } | null)?.code ?? '';
+  const message = (rpcError as { message?: string } | null)?.message ?? '';
+  const isMissing =
+    code === 'PGRST202' ||
+    /could not find the function|does not exist|schema cache/i.test(message);
+  if (!isMissing) throw rpcError;
+
   const { error } = await withTimeout(
     supabase.from('chat_rooms').delete().eq('booking_id', bookingId),
   );
-  if (error) {
-    throw error;
-  }
+  if (error) throw error;
 }
 
 // ── Admin Chat Management ──────────────────────────────────

@@ -6,6 +6,7 @@ import {
     getBookingById,
     type ChatMessage,
     type ChatRoom,
+    broadcastChatMessage,
     getChatMessages,
     getChatRoomByBooking,
     getChatRoomsForUser,
@@ -36,14 +37,14 @@ const translations = {
     search: 'Tìm kiếm cuộc trò chuyện...',
     online: 'Đang hoạt động',
     noChats: 'Chưa có cuộc trò chuyện nào',
-    noChatsDesc: 'Bắt đầu đặt dịch vụ để trò chuyện với kỹ thuật viên',
+    noChatsDesc: 'Bạn cần đặt và kết nối với KTV trước khi nhắn tin. Chat sẽ tự xoá khi đơn hoàn tất.',
   },
   en: {
     title: 'Messages',
     search: 'Search conversations...',
     online: 'Active',
     noChats: 'No conversations yet',
-    noChatsDesc: 'Start booking a service to chat with a therapist',
+    noChatsDesc: 'Connect with a therapist by booking to start chatting. Chats are cleared once the booking is completed.',
   },
 };
 
@@ -69,9 +70,14 @@ export default function ChatScreen({ onClose, bookingId }: { onClose: () => void
   const [loadingRooms, setLoadingRooms] = useState(false);
   const [bookingChatStatus, setBookingChatStatus] = useState<'ready' | 'pending' | 'done' | null>(null);
   const [bookingTherapistName, setBookingTherapistName] = useState('');
+  const [userDismissedRoom, setUserDismissedRoom] = useState(false);
 
 
   const userId = user?.authUid || user?.phoneNumber || '';
+
+  useEffect(() => {
+    setUserDismissedRoom(false);
+  }, [bookingId]);
 
   // If a specific bookingId is provided, open that chat directly
   useEffect(() => {
@@ -172,6 +178,42 @@ export default function ChatScreen({ onClose, bookingId }: { onClose: () => void
     };
   }, [activeBooking?.bookingId, bookingId, clearActiveBooking, onClose, selectedRoom?.bookingId]);
 
+  // When sync detects booking became confirmed/in-progress but room wasn't fetched yet
+  useEffect(() => {
+    if (bookingChatStatus !== 'ready' || selectedRoom || !bookingId || !userId || userDismissedRoom) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const booking = await getBookingById(bookingId);
+        if (!booking || cancelled) return;
+        const rooms = await getChatRoomsForUser(userId);
+        const existingRoom = rooms.find((r) => r.bookingId === bookingId);
+        let resolvedRoom = existingRoom ?? (await getChatRoomByBooking(bookingId));
+        if (!resolvedRoom) {
+          const customerId = String(booking.customerUserId ?? booking.userId ?? userId ?? '');
+          const therapistId = String(booking.therapistId ?? '');
+          if (customerId && therapistId) {
+            await getOrCreateChatRoom(
+              bookingId,
+              customerId,
+              therapistId,
+              String(booking.customerName ?? ''),
+              String(booking.therapistName ?? ''),
+            );
+            resolvedRoom = await getChatRoomByBooking(bookingId);
+          }
+        }
+        if (!cancelled && resolvedRoom) {
+          setSelectedRoom(resolvedRoom);
+          setChatRooms([resolvedRoom]);
+        }
+      } catch {
+        // best-effort
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [bookingChatStatus, selectedRoom, bookingId, userId, userDismissedRoom]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Load user's chat room list
   useEffect(() => {
     if (!userId) return;
@@ -190,7 +232,8 @@ export default function ChatScreen({ onClose, bookingId }: { onClose: () => void
         chatRoom={selectedRoom}
         onClose={() => {
           if (selectedRoom && !activeBooking) {
-            setSelectedRoom(null); // Go back to room list
+            setUserDismissedRoom(true);
+            setSelectedRoom(null);
           } else {
             onClose();
           }
@@ -474,9 +517,14 @@ function ActiveChatView({
     };
     setMessages((prev) => [...prev, optimisticMsg]);
 
-    // Send to Supabase
-    sendChatMessage(roomId, userId, userRole, text, 'text').catch(() => {
-      // Remove optimistic message on failure
+    // Persist then broadcast so the other party receives it instantly
+    sendChatMessage(roomId, userId, userRole, text, 'text').then((msgId) => {
+      const realMsg: ChatMessage = { ...optimisticMsg, id: msgId };
+      // Replace optimistic entry with real one
+      setMessages((prev) => prev.map(m => m.id === optimisticMsg.id ? realMsg : m));
+      // Broadcast to other party's channel subscription
+      broadcastChatMessage(roomId, realMsg).catch(() => {});
+    }).catch(() => {
       setMessages((prev) => prev.filter(m => m.id !== optimisticMsg.id));
     });
   }, [messageText, roomId, userId, userRole]);
