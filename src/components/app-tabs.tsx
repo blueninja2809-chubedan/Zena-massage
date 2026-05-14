@@ -1,7 +1,8 @@
 import Feather from '@expo/vector-icons/Feather';
 import { Tabs } from 'expo-router';
 import React from 'react';
-import { StyleSheet, useWindowDimensions, type ViewStyle } from 'react-native';
+import { Platform, StyleSheet, useWindowDimensions, type ViewStyle } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AppColors } from '@/constants/appColors';
 import { debugLog } from '@/lib/debugLog';
@@ -33,6 +34,7 @@ function CustomerTabs({
   tabLabelStyle,
   tabItemStyle,
   tabBarStyle,
+  tabBarBottomInset,
 }: {
   palette: TabPalette;
   isEn: boolean;
@@ -48,9 +50,12 @@ function CustomerTabs({
     elevation: number;
     shadowOpacity: number;
   };
+  /** Extra bottom inset for Android when system insets are 0 but content draws under nav bar */
+  tabBarBottomInset: number;
 }) {
   return (
     <Tabs
+      safeAreaInsets={{ bottom: tabBarBottomInset }}
       screenOptions={{
         headerShown: false,
         sceneStyle: TAB_SCENE_STYLE,
@@ -101,6 +106,7 @@ function TherapistTabs({
   tabLabelStyle,
   tabItemStyle,
   tabBarStyle,
+  tabBarBottomInset,
 }: {
   palette: TabPalette;
   isEn: boolean;
@@ -116,9 +122,11 @@ function TherapistTabs({
     elevation: number;
     shadowOpacity: number;
   };
+  tabBarBottomInset: number;
 }) {
   return (
     <Tabs
+      safeAreaInsets={{ bottom: tabBarBottomInset }}
       screenOptions={{
         headerShown: false,
         sceneStyle: TAB_SCENE_STYLE,
@@ -169,6 +177,12 @@ export default function AppTabs() {
   const { user } = useUser();
   const { language } = useLanguage();
   const isEn = language === 'en';
+  const insets = useSafeAreaInsets();
+  /** Some Android builds report bottom inset 0 while drawing behind 3-button / gesture nav — cap minimum */
+  const tabBarBottomInset = Math.max(
+    insets.bottom,
+    Platform.OS === 'android' ? 28 : 0,
+  );
 
   /**
    * Do not set height / paddingBottom on tabBarStyle: @react-navigation/bottom-tabs already applies
@@ -180,6 +194,9 @@ export default function AppTabs() {
     fontWeight: '700' as const,
     marginTop: 2,
     marginBottom: 0,
+    ...(Platform.OS === 'android'
+      ? { includeFontPadding: false as const, lineHeight: isTablet ? 16 : 15 }
+      : {}),
   };
   const tabItemStyle = {
     borderRadius: 0,
@@ -212,6 +229,7 @@ export default function AppTabs() {
         tabLabelStyle={tabLabelStyle}
         tabItemStyle={tabItemStyle}
         tabBarStyle={tabBarStyle}
+        tabBarBottomInset={tabBarBottomInset}
       />
     );
   }
@@ -223,6 +241,7 @@ export default function AppTabs() {
       tabLabelStyle={tabLabelStyle}
       tabItemStyle={tabItemStyle}
       tabBarStyle={tabBarStyle}
+      tabBarBottomInset={tabBarBottomInset}
     />
   );
 }

@@ -546,10 +546,6 @@ function ServiceDetailModal({
             <TouchableOpacity style={detailStyles.backBtn} onPress={onClose}>
               <Text style={detailStyles.backBtnText}>‹</Text>
             </TouchableOpacity>
-            {/* Share button */}
-            <TouchableOpacity style={detailStyles.shareBtn}>
-              <Text style={detailStyles.shareBtnText}>⤴</Text>
-            </TouchableOpacity>
           </View>
 
           {/* Info */}
@@ -773,21 +769,6 @@ const detailStyles = StyleSheet.create({
     fontSize: 24,
     lineHeight: 28,
     fontWeight: '600',
-  },
-  shareBtn: {
-    position: 'absolute',
-    top: 50,
-    right: 16,
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: 'rgba(0,0,0,0.35)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  shareBtnText: {
-    color: '#fff',
-    fontSize: 18,
   },
   // Info
   infoSection: {

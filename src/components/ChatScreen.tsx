@@ -3,31 +3,36 @@ import { useActiveBooking } from '@/contexts/ActiveBookingContext';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useUser } from '@/contexts/UserContext';
 import {
-    getBookingById,
-    type ChatMessage,
-    type ChatRoom,
-    broadcastChatMessage,
-    getChatMessages,
-    getChatRoomByBooking,
-    getChatRoomsForUser,
-    getOrCreateChatRoom,
-    markChatMessagesRead,
-    sendChatMessage,
-    subscribeToChatMessages,
+  broadcastChatMessage,
+  getBookingById,
+  getChatMessages,
+  getChatRoomByBooking,
+  getChatRoomsForUser,
+  getOrCreateChatRoom,
+  getTherapistById,
+  getUserProfileByUid,
+  markChatMessagesRead,
+  normalizeTherapistMediaUrl,
+  resolveTherapistImageUriForUi,
+  sendChatMessage,
+  subscribeToChatMessages,
+  type ChatMessage,
+  type ChatRoom,
 } from '@/lib/supabaseService';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import Feather from '@expo/vector-icons/Feather';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-    ActivityIndicator,
-    FlatList,
-    Image,
-    KeyboardAvoidingView,
-    Platform,
-    StatusBar,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  FlatList,
+  Image,
+  KeyboardAvoidingView,
+  Platform,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -60,6 +65,22 @@ const COLORS = {
   unreadBg: AppColors.primarySoft,
 };
 
+type BookingChatFields = {
+  customerName?: unknown;
+  customerUserId?: unknown;
+  therapistName?: unknown;
+  userId?: unknown;
+  therapistId?: unknown;
+};
+
+function resolveProfileAvatarUri(profile: Record<string, unknown> | null | undefined): string {
+  const direct = normalizeTherapistMediaUrl(String(profile?.avatarUri ?? '').trim());
+  if (direct) return direct;
+  const serviceImages = Array.isArray(profile?.serviceImages) ? profile.serviceImages : [];
+  const firstServiceImage = serviceImages.find((item): item is string => typeof item === 'string' && item.trim().length > 0);
+  return firstServiceImage ? normalizeTherapistMediaUrl(firstServiceImage.trim()) : '';
+}
+
 export default function ChatScreen({ onClose, bookingId }: { onClose: () => void; bookingId?: string }) {
   const { language } = useLanguage();
   const strings = translations[language as keyof typeof translations] || translations.vi;
@@ -87,8 +108,9 @@ export default function ChatScreen({ onClose, bookingId }: { onClose: () => void
       (async () => {
         try {
           const booking = await getBookingById(bookingId);
+          const bookingFields = booking as BookingChatFields | null;
           const bookingStatus = String(booking?.status ?? '');
-          const therapistName = typeof booking?.therapistName === 'string' ? booking.therapistName : '';
+          const therapistName = typeof bookingFields?.therapistName === 'string' ? bookingFields.therapistName : '';
           setBookingTherapistName(therapistName);
 
           if (bookingStatus === 'completed' || bookingStatus === 'cancelled') {
@@ -108,14 +130,14 @@ export default function ChatScreen({ onClose, bookingId }: { onClose: () => void
           const room = userId ? (await getChatRoomsForUser(userId)).find((r) => r.bookingId === bookingId) : null;
           let resolvedRoom = room ?? (await getChatRoomByBooking(bookingId));
           if (!resolvedRoom && booking) {
-            const customerId = String(booking.customerUserId ?? booking.userId ?? userId ?? '');
-            const therapistId = String(booking.therapistId ?? '');
+            const customerId = String(bookingFields?.customerUserId ?? bookingFields?.userId ?? userId ?? '');
+            const therapistId = String(bookingFields?.therapistId ?? '');
             if (customerId && therapistId) {
               await getOrCreateChatRoom(
                 bookingId,
                 customerId,
                 therapistId,
-                String(booking.customerName ?? ''),
+                String(bookingFields?.customerName ?? ''),
                 therapistName,
               );
               resolvedRoom = await getChatRoomByBooking(bookingId);
@@ -186,19 +208,20 @@ export default function ChatScreen({ onClose, bookingId }: { onClose: () => void
       try {
         const booking = await getBookingById(bookingId);
         if (!booking || cancelled) return;
+        const bookingFields = booking as BookingChatFields;
         const rooms = await getChatRoomsForUser(userId);
         const existingRoom = rooms.find((r) => r.bookingId === bookingId);
         let resolvedRoom = existingRoom ?? (await getChatRoomByBooking(bookingId));
         if (!resolvedRoom) {
-          const customerId = String(booking.customerUserId ?? booking.userId ?? userId ?? '');
-          const therapistId = String(booking.therapistId ?? '');
+          const customerId = String(bookingFields.customerUserId ?? bookingFields.userId ?? userId ?? '');
+          const therapistId = String(bookingFields.therapistId ?? '');
           if (customerId && therapistId) {
             await getOrCreateChatRoom(
               bookingId,
               customerId,
               therapistId,
-              String(booking.customerName ?? ''),
-              String(booking.therapistName ?? ''),
+              String(bookingFields.customerName ?? ''),
+              String(bookingFields.therapistName ?? ''),
             );
             resolvedRoom = await getChatRoomByBooking(bookingId);
           }
@@ -249,13 +272,13 @@ export default function ChatScreen({ onClose, bookingId }: { onClose: () => void
         <StatusBar barStyle="dark-content" backgroundColor={COLORS.bg} />
         <View style={styles.header}>
           <TouchableOpacity style={styles.backBtn} onPress={onClose}>
-            <Text style={styles.backIcon}>←</Text>
+            <Feather name="arrow-left" size={22} color={COLORS.text} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>{strings.title}</Text>
           <View style={{ width: 38 }} />
         </View>
         <View style={styles.emptyContainer}>
-          <Text style={styles.emptyEmoji}>⏳</Text>
+          <Feather name="clock" size={52} color={COLORS.lightText} style={styles.emptyIcon} />
           <Text style={styles.emptyTitle}>
             {language === 'en' ? 'Waiting for therapist confirmation' : 'Đang chờ kỹ thuật viên xác nhận'}
           </Text>
@@ -275,13 +298,13 @@ export default function ChatScreen({ onClose, bookingId }: { onClose: () => void
         <StatusBar barStyle="dark-content" backgroundColor={COLORS.bg} />
         <View style={styles.header}>
           <TouchableOpacity style={styles.backBtn} onPress={onClose}>
-            <Text style={styles.backIcon}>←</Text>
+            <Feather name="arrow-left" size={22} color={COLORS.text} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>{strings.title}</Text>
           <View style={{ width: 38 }} />
         </View>
         <View style={styles.emptyContainer}>
-          <Text style={styles.emptyEmoji}>✅</Text>
+          <Feather name="check-circle" size={52} color={COLORS.green} style={styles.emptyIcon} />
           <Text style={styles.emptyTitle}>
             {language === 'en' ? 'This booking is closed' : 'Đơn này đã kết thúc'}
           </Text>
@@ -301,7 +324,7 @@ export default function ChatScreen({ onClose, bookingId }: { onClose: () => void
       <StatusBar barStyle="dark-content" backgroundColor={COLORS.bg} />
       <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={onClose}>
-          <Text style={styles.backIcon}>←</Text>
+          <Feather name="arrow-left" size={22} color={COLORS.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>{strings.title}</Text>
         <View style={{ width: 38 }} />
@@ -313,7 +336,7 @@ export default function ChatScreen({ onClose, bookingId }: { onClose: () => void
         </View>
       ) : chatRooms.length === 0 ? (
         <View style={styles.emptyContainer}>
-          <Text style={styles.emptyEmoji}>💬</Text>
+          <Feather name="message-circle" size={52} color={COLORS.lightText} style={styles.emptyIcon} />
           <Text style={styles.emptyTitle}>{strings.noChats}</Text>
           <Text style={styles.emptyDesc}>{strings.noChatsDesc}</Text>
         </View>
@@ -333,7 +356,7 @@ export default function ChatScreen({ onClose, bookingId }: { onClose: () => void
               >
                 <View style={styles.avatarWrap}>
                   <View style={styles.avatar}>
-                    <Text style={styles.avatarEmoji}>{isCustomer ? '💆' : '👤'}</Text>
+                    <Feather name="user" size={26} color={COLORS.green} />
                   </View>
                 </View>
                 <View style={styles.chatBody}>
@@ -373,7 +396,6 @@ function ActiveChatView({
   const { user } = useUser();
   const therapist = activeBooking?.therapist;
   const therapistName = therapist?.name || existingRoom?.therapistName || '';
-  const therapistAvatar = therapist?.avatar || '';
   const userId = user?.authUid || user?.phoneNumber || existingRoom?.customerId || existingRoom?.therapistId || '';
   const userRole: 'customer' | 'therapist' = user?.role === 'therapist' ? 'therapist' : 'customer';
 
@@ -381,13 +403,17 @@ function ActiveChatView({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [roomId, setRoomId] = useState<string | null>(existingRoom?.id || null);
   const [loading, setLoading] = useState(true);
+  const [incomingAvatarUri, setIncomingAvatarUri] = useState(() =>
+    normalizeTherapistMediaUrl(therapist?.avatar?.trim() || ''),
+  );
   const flatListRef = useRef<FlatList>(null);
+  const bootstrappedRoomIdsRef = useRef<Set<string>>(new Set());
 
   const chatStrings = language === 'en' ? {
     connected: 'Connected',
     bookingTime: 'Booking time:',
-    noteWarning: '❗ NOTE: Massage Now does NOT allow: Requesting cancellation to work outside/Sharing contact information/Using inappropriate language...',
-    noteWarning2: 'Please only communicate on Massage Now. We are not responsible if you contact outside the app.',
+    noteWarning: 'NOTE: Zena does NOT allow: Requesting cancellation to work outside/Sharing contact information/Using inappropriate language...',
+    noteWarning2: 'Please only communicate on Zena. We are not responsible if you contact outside the app.',
     translate: 'Translate',
     library: 'Library',
     location: 'Location',
@@ -399,8 +425,8 @@ function ActiveChatView({
   } : {
     connected: 'Đã kết nối',
     bookingTime: 'Thời gian đặt hẹn:',
-    noteWarning: '❗ LƯU Ý: Massage Now KHÔNG cho phép hành vi: Yêu cầu hủy đơn để làm ngoài/Cung cấp thông tin liên hệ/Sử dụng các từ ngữ nhạy cảm...',
-    noteWarning2: 'Vui lòng chỉ trao đổi trên Massage Now. Chúng tôi không chịu trách nhiệm nếu bạn liên hệ ngoài ứng dụng.',
+    noteWarning: 'LƯU Ý: Zena KHÔNG cho phép hành vi: Yêu cầu hủy đơn để làm ngoài/Cung cấp thông tin liên hệ/Sử dụng các từ ngữ nhạy cảm...',
+    noteWarning2: 'Vui lòng chỉ trao đổi trên Zena. Chúng tôi không chịu trách nhiệm nếu bạn liên hệ ngoài ứng dụng. Nếu vi phạm sẽ bị khoá tài khoản vĩnh viễn.',
     translate: 'Dịch',
     library: 'Thư viện',
     location: 'Vị trí',
@@ -410,6 +436,65 @@ function ActiveChatView({
     detail: 'Xem chi tiết',
     loading: 'Đang tải trò chuyện...',
   };
+
+  useEffect(() => {
+    let cancelled = false;
+    const activeTherapistAvatar = normalizeTherapistMediaUrl(therapist?.avatar?.trim() || '');
+    const therapistId = String(activeBooking?.therapist.id || existingRoom?.therapistId || '');
+    const customerId = String(existingRoom?.customerId || '');
+
+    (async () => {
+      try {
+        if (userRole === 'customer') {
+          let resolvedAvatar = activeTherapistAvatar;
+
+          if (therapistId) {
+            const therapistRecord = await getTherapistById(therapistId);
+            if (cancelled) return;
+            const fromTherapist = therapistRecord
+              ? resolveTherapistImageUriForUi(therapistRecord)
+              : '';
+            if (fromTherapist) {
+              resolvedAvatar = fromTherapist;
+            }
+
+            if (!resolvedAvatar) {
+              const profile = await getUserProfileByUid(therapistId);
+              if (cancelled) return;
+              resolvedAvatar = resolveProfileAvatarUri(profile);
+            }
+          }
+
+          if (!cancelled) setIncomingAvatarUri(resolvedAvatar);
+          return;
+        }
+
+        if (!customerId) {
+          if (!cancelled) setIncomingAvatarUri('');
+          return;
+        }
+
+        const profile = await getUserProfileByUid(customerId);
+        if (!cancelled) {
+          setIncomingAvatarUri(resolveProfileAvatarUri(profile));
+        }
+      } catch {
+        if (!cancelled) {
+          setIncomingAvatarUri(userRole === 'customer' ? activeTherapistAvatar : '');
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeBooking?.therapist.id,
+    existingRoom?.customerId,
+    existingRoom?.therapistId,
+    therapist?.avatar,
+    userRole,
+  ]);
 
   // Initialize chat room and load messages
   useEffect(() => {
@@ -437,9 +522,12 @@ function ActiveChatView({
 
         setRoomId(currentRoomId);
 
-        // Send system welcome messages if room is empty
+        // Send system welcome messages once per opened room.
         const existingMessages = await getChatMessages(currentRoomId, 1);
-        if (existingMessages.length === 0) {
+        const shouldSendWelcome =
+          existingMessages.length === 0 && !bootstrappedRoomIdsRef.current.has(currentRoomId);
+        if (shouldSendWelcome) {
+          bootstrappedRoomIdsRef.current.add(currentRoomId);
           const now = new Date();
           const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
           const dateStr = `${now.getDate().toString().padStart(2, '0')}/${(now.getMonth() + 1).toString().padStart(2, '0')}/${now.getFullYear()}`;
@@ -447,7 +535,7 @@ function ActiveChatView({
             currentRoomId,
             'system',
             'system',
-            `🟢 ${chatStrings.connected}\n\n${chatStrings.bookingTime} ${timeStr} ${dateStr}`,
+            `${chatStrings.connected}\n\n${chatStrings.bookingTime} ${timeStr} ${dateStr}`,
             'system',
           );
           await sendChatMessage(
@@ -534,23 +622,77 @@ function ActiveChatView({
     return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
   };
 
+  const visibleMessages = useMemo(() => {
+    const seenSystemKeys = new Set<string>();
+    return messages.filter((message) => {
+      if (message.senderRole !== 'system') return true;
+
+      const content = message.content.trim();
+      let key = `system:${content}`;
+      if (
+        content.startsWith('❗') ||
+        content.startsWith('NOTE:') ||
+        content.startsWith('LƯU Ý:') ||
+        content.includes('Massage Now KHÔNG') ||
+        content.includes('Massage Now does NOT')
+      ) {
+        key = 'system-warning';
+      } else if (content.includes(chatStrings.connected) && content.includes(chatStrings.bookingTime)) {
+        key = 'system-connected';
+      }
+
+      if (seenSystemKeys.has(key)) return false;
+      seenSystemKeys.add(key);
+      return true;
+    });
+  }, [chatStrings.bookingTime, chatStrings.connected, messages]);
+
   const renderMessage = ({ item }: { item: ChatMessage }) => {
     const isMyMessage = item.senderId === userId;
     const isSystem = item.senderRole === 'system';
 
     if (isSystem) {
-      const isWarning = item.content.startsWith('❗');
+      const isWarning =
+        item.content.startsWith('❗') ||
+        item.content.startsWith('NOTE:') ||
+        item.content.startsWith('LƯU Ý:');
+      const systemContent = item.content
+        .replace(/^[❗🟢]\s*/, '')
+        .replace(/Massage Now/g, 'Zena');
+      const isConnected = systemContent.includes(chatStrings.connected);
+      const bookingTimeLine =
+        systemContent
+          .split('\n')
+          .map((line) => line.trim())
+          .find((line) => line.includes(chatStrings.bookingTime)) ?? '';
       if (isWarning) {
         return (
           <View style={activeStyles.warningBubble}>
-            <Text style={activeStyles.warningText}>{item.content}</Text>
+            <View style={activeStyles.systemMessageRow}>
+              <Feather name="alert-triangle" size={16} color="#C05A19" />
+              <Text style={activeStyles.warningText}>{systemContent}</Text>
+            </View>
           </View>
         );
       }
       return (
         <View style={activeStyles.systemBubble}>
-          <Text style={activeStyles.systemText}>{item.content}</Text>
-          <Text style={activeStyles.msgTime}>{formatMsgTime(item.createdAt)}</Text>
+          {isConnected ? (
+            <>
+              <View style={activeStyles.connectedRow}>
+                <View style={activeStyles.connectedDot} />
+                <Text style={activeStyles.connectedText}>{chatStrings.connected}</Text>
+              </View>
+              {!!bookingTimeLine && (
+                <Text style={activeStyles.systemTimeText}>{bookingTimeLine}</Text>
+              )}
+            </>
+          ) : (
+            <Text style={activeStyles.systemText}>{systemContent}</Text>
+          )}
+          <Text style={[activeStyles.msgTime, isConnected && activeStyles.connectedMetaTime]}>
+            {formatMsgTime(item.createdAt)}
+          </Text>
         </View>
       );
     }
@@ -572,13 +714,17 @@ function ActiveChatView({
     // Other party's message
     return (
       <View style={activeStyles.therapistMsgRow}>
-        {therapistAvatar ? (
+        {incomingAvatarUri ? (
           <View style={activeStyles.therapistMsgAvatarWrap}>
-            <Image source={{ uri: therapistAvatar }} style={activeStyles.therapistMsgAvatar} />
+            <Image
+              source={{ uri: incomingAvatarUri }}
+              style={activeStyles.therapistMsgAvatar}
+              onError={() => setIncomingAvatarUri('')}
+            />
           </View>
         ) : (
           <View style={[activeStyles.therapistMsgAvatarWrap, { backgroundColor: '#E8F0FE', alignItems: 'center', justifyContent: 'center', borderRadius: 12 }]}>
-            <Text style={{ fontSize: 16 }}>💆</Text>
+            <Feather name="user" size={18} color="#5F8F47" />
           </View>
         )}
         <View style={activeStyles.therapistBubble}>
@@ -586,7 +732,7 @@ function ActiveChatView({
           <View style={activeStyles.therapistMsgFooter}>
             <Text style={activeStyles.msgTime}>{formatMsgTime(item.createdAt)}</Text>
             <TouchableOpacity style={activeStyles.translateBtn}>
-              <Text style={activeStyles.translateIcon}>🌐</Text>
+              <Feather name="globe" size={12} color="#5F8F47" />
               <Text style={activeStyles.translateText}>{chatStrings.translate}</Text>
             </TouchableOpacity>
           </View>
@@ -601,7 +747,7 @@ function ActiveChatView({
         <StatusBar barStyle="dark-content" />
         <View style={activeStyles.header}>
           <TouchableOpacity style={activeStyles.backBtn} onPress={onClose}>
-            <Text style={activeStyles.backIcon}>←</Text>
+            <Feather name="arrow-left" size={22} color="#1A1A1A" />
           </TouchableOpacity>
           <Text style={activeStyles.headerName}>{therapistName}</Text>
           <View style={{ width: 38 }} />
@@ -620,41 +766,10 @@ function ActiveChatView({
       {/* Header */}
       <View style={activeStyles.header}>
         <TouchableOpacity style={activeStyles.backBtn} onPress={onClose}>
-          <Text style={activeStyles.backIcon}>←</Text>
+          <Feather name="arrow-left" size={22} color="#1A1A1A" />
         </TouchableOpacity>
         <Text style={activeStyles.headerName}>{therapistName}</Text>
         <View style={{ width: 38 }} />
-      </View>
-
-      <View style={activeStyles.orderCard}>
-        {therapistAvatar ? (
-          <Image source={{ uri: therapistAvatar }} style={activeStyles.orderAvatar} />
-        ) : (
-          <View style={[activeStyles.orderAvatar, { backgroundColor: '#E8F0FE', alignItems: 'center', justifyContent: 'center' }]}>
-            <Text style={{ fontSize: 24 }}>💆</Text>
-          </View>
-        )}
-        <View style={{ flex: 1 }}>
-          <Text style={activeStyles.orderName}>{therapistName}</Text>
-          <Text style={activeStyles.orderPreview} numberOfLines={1}>
-            {messages.length > 0 ? messages[messages.length - 1].content : ''}
-          </Text>
-        </View>
-        <Text style={activeStyles.orderTime}>
-          {messages.length > 0 ? formatMsgTime(messages[messages.length - 1].createdAt) : ''}
-        </Text>
-      </View>
-
-      <View style={activeStyles.quickActionsRow}>
-        <TouchableOpacity style={activeStyles.quickActionBtn} activeOpacity={0.8}>
-          <Text style={activeStyles.quickActionText}>📞 {chatStrings.call}</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={activeStyles.quickActionBtn} activeOpacity={0.8}>
-          <Text style={activeStyles.quickActionText}>💬 {chatStrings.sms}</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={[activeStyles.quickActionBtn, activeStyles.quickActionGhost]} activeOpacity={0.8}>
-          <Text style={[activeStyles.quickActionText, activeStyles.quickActionGhostText]}>{chatStrings.detail}</Text>
-        </TouchableOpacity>
       </View>
 
       {/* Chat messages */}
@@ -665,7 +780,7 @@ function ActiveChatView({
       >
         <FlatList
           ref={flatListRef}
-          data={messages}
+          data={visibleMessages}
           renderItem={renderMessage}
           keyExtractor={(item) => item.id}
           contentContainerStyle={activeStyles.messagesList}
@@ -677,11 +792,15 @@ function ActiveChatView({
         <View style={activeStyles.inputArea}>
           <View style={activeStyles.inputToolbar}>
             <TouchableOpacity style={activeStyles.toolbarBtn}>
-              <Text style={activeStyles.toolbarIcon}>📷</Text>
+              <Feather name="phone" size={16} color="#5F8F47" />
+              <Text style={activeStyles.toolbarLabel}>{chatStrings.call}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={activeStyles.toolbarBtn}>
+              <Feather name="image" size={16} color="#5F8F47" />
               <Text style={activeStyles.toolbarLabel}>{chatStrings.library}</Text>
             </TouchableOpacity>
             <TouchableOpacity style={activeStyles.toolbarBtn}>
-              <Text style={activeStyles.toolbarIcon}>📍</Text>
+              <Feather name="map-pin" size={16} color="#5F8F47" />
               <Text style={activeStyles.toolbarLabel}>{chatStrings.location}</Text>
             </TouchableOpacity>
           </View>
@@ -696,7 +815,7 @@ function ActiveChatView({
               onSubmitEditing={handleSend}
             />
             <TouchableOpacity style={activeStyles.sendBtn} onPress={handleSend}>
-              <Text style={activeStyles.sendIcon}>➤</Text>
+              <Feather name="send" size={18} color="#fff" />
             </TouchableOpacity>
           </View>
         </View>
@@ -713,47 +832,38 @@ const activeStyles = StyleSheet.create({
     borderBottomWidth: 1, borderBottomColor: '#E3E8E1',
   },
   backBtn: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center' },
-  backIcon: { fontSize: 22, color: '#1A1A1A', fontWeight: '600' },
   headerName: { fontSize: 17, fontWeight: '700', color: '#1A1A1A' },
-  orderCard: {
-    marginHorizontal: 10,
-    marginTop: 8,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: '#DDE5D7',
-    backgroundColor: '#FFFFFF',
-    padding: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  orderAvatar: { width: 60, height: 60, borderRadius: 14, backgroundColor: '#DDE7D8' },
-  orderName: { fontSize: 18, fontWeight: '700', color: '#111' },
-  orderPreview: { fontSize: 15, color: '#51565B', marginTop: 4 },
-  orderTime: { color: '#71767B', fontSize: 16 },
-  quickActionsRow: {
-    flexDirection: 'row',
-    gap: 8,
-    paddingHorizontal: 10,
-    marginTop: 8,
-  },
-  quickActionBtn: {
-    flex: 1,
-    backgroundColor: '#5F8F47',
-    borderRadius: 999,
-    alignItems: 'center',
-    paddingVertical: 9,
-  },
-  quickActionGhost: { backgroundColor: '#EEF3EC' },
-  quickActionText: { color: '#fff', fontSize: 13, fontWeight: '700' },
-  quickActionGhostText: { color: '#5F8F47' },
   messagesList: { padding: 16, paddingBottom: 8 },
   systemBubble: {
-    backgroundColor: '#fff', borderRadius: 14, padding: 14,
-    marginBottom: 12, alignSelf: 'center', maxWidth: '90%',
+    backgroundColor: '#fff', borderRadius: 14,
+    paddingHorizontal: 20, paddingVertical: 18,
+    marginBottom: 12, alignSelf: 'center', minWidth: 240, maxWidth: '90%',
     shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.05, shadowRadius: 2, elevation: 1,
+    alignItems: 'center',
   },
+  connectedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    marginBottom: 18,
+  },
+  connectedDot: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: '#19C826',
+    shadowColor: '#19C826',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.35,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  connectedText: { color: '#1A1A1A', fontSize: 15, fontWeight: '500' },
+  systemTimeText: { alignSelf: 'flex-start', fontSize: 14, color: '#1A1A1A', lineHeight: 20 },
+  connectedMetaTime: { alignSelf: 'flex-start', marginTop: 4 },
+  systemMessageRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
   systemText: { fontSize: 13, color: '#1A1A1A', lineHeight: 20, textAlign: 'center' },
   warningBubble: {
     backgroundColor: '#FFF9E6', borderRadius: 14, padding: 14,
@@ -795,7 +905,6 @@ const activeStyles = StyleSheet.create({
     backgroundColor: '#EEF2EE', borderRadius: 10,
     paddingHorizontal: 8, paddingVertical: 3,
   },
-  translateIcon: { fontSize: 12 },
   translateText: { fontSize: 11, color: '#5F8F47', fontWeight: '600' },
   inputArea: {
     backgroundColor: '#fff', borderTopWidth: 1, borderTopColor: '#E3E8E1',
@@ -805,7 +914,6 @@ const activeStyles = StyleSheet.create({
     flexDirection: 'row', paddingHorizontal: 16, paddingTop: 10, gap: 20,
   },
   toolbarBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  toolbarIcon: { fontSize: 16 },
   toolbarLabel: { fontSize: 13, color: '#5F8F47', fontWeight: '600' },
   inputRow: {
     flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12,
@@ -819,7 +927,6 @@ const activeStyles = StyleSheet.create({
     width: 40, height: 40, borderRadius: 20,
     backgroundColor: '#5F8F47', alignItems: 'center', justifyContent: 'center',
   },
-  sendIcon: { fontSize: 18, color: '#fff' },
 });
 
 const styles = StyleSheet.create({
@@ -841,11 +948,6 @@ const styles = StyleSheet.create({
     height: 38,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  backIcon: {
-    fontSize: 22,
-    color: COLORS.text,
-    fontWeight: '600',
   },
   headerTitle: {
     fontSize: 18,
@@ -951,9 +1053,6 @@ const styles = StyleSheet.create({
   avatarSupport: {
     backgroundColor: '#E8F0FE',
   },
-  avatarEmoji: {
-    fontSize: 26,
-  },
   onlineDot: {
     position: 'absolute',
     bottom: 1,
@@ -1030,11 +1129,7 @@ const styles = StyleSheet.create({
     paddingBottom: 80,
     paddingHorizontal: 40,
   },
-  emptyEmoji: {
-    fontSize: 56,
-    marginBottom: 16,
-    opacity: 0.4,
-  },
+  emptyIcon: { marginBottom: 16, opacity: 0.5 },
   emptyTitle: {
     fontSize: 17,
     fontWeight: '700',

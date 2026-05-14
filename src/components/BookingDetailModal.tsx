@@ -294,7 +294,7 @@ export default function BookingDetailModal({
           <View style={styles.card}>
             <View style={styles.therapistRow}>
               <View style={styles.therapistAvatar}>
-                <Text style={styles.avatarEmoji}>💆‍♀️</Text>
+                <Feather name="user" size={24} color={COLORS.dark} />
               </View>
               <View style={styles.therapistInfo}>
                 <View style={styles.therapistNameRow}>
@@ -302,7 +302,7 @@ export default function BookingDetailModal({
                   <Feather name="chevron-right" size={18} color={COLORS.lightText} />
                 </View>
                 <View style={styles.ratingRow}>
-                  <Text style={styles.ratingStar}>⭐</Text>
+                  <Feather name="star" size={13} color="#F5A623" />
                   <Text style={styles.ratingText}>5.0</Text>
                   <Text style={styles.reviewCount}>(151 {strings.reviews})</Text>
                 </View>
@@ -564,9 +564,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: 12,
   },
-  avatarEmoji: {
-    fontSize: 28,
-  },
   therapistInfo: {
     flex: 1,
   },
@@ -585,9 +582,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-  },
-  ratingStar: {
-    fontSize: 13,
   },
   ratingText: {
     fontSize: 13,

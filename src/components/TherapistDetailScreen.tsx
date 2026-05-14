@@ -1,3 +1,4 @@
+import Feather from '@expo/vector-icons/Feather';
 import { useBookings } from '@/contexts/BookingsContext';
 import { useLanguage } from '@/contexts/LanguageContext';
 import {
@@ -197,11 +198,14 @@ function generateReviews(therapist: Therapist): ReviewItem[] {
 
 function StarDisplay({ rating, size = 14 }: { rating: number; size?: number }) {
   return (
-    <View style={{ flexDirection: 'row' }}>
+    <View style={{ flexDirection: 'row', gap: 1 }}>
       {[1, 2, 3, 4, 5].map((i) => (
-        <Text key={i} style={{ fontSize: size, color: i <= rating ? COLORS.gold : '#DDD' }}>
-          ★
-        </Text>
+        <Feather
+          key={i}
+          name="star"
+          size={size}
+          color={i <= rating ? COLORS.gold : '#DDD'}
+        />
       ))}
     </View>
   );
@@ -367,23 +371,18 @@ export default function TherapistDetailScreen({
               style={styles.heroPlaceholder}
               onPress={() => openPhotoViewer(0)}
             >
-              <Text style={styles.heroEmoji}>
-                {therapist.gender === 'female' ? '👩' : '👨'}
-              </Text>
+              <Feather name="user" size={96} color={COLORS.green} />
             </TouchableOpacity>
           )}
 
           {/* Overlay top buttons */}
           <View style={[styles.heroTopBar, { top: heroTopOffset }]}>
             <TouchableOpacity style={styles.heroCircleBtn} onPress={onClose}>
-              <Text style={styles.heroBtnText}>‹</Text>
+              <Feather name="chevron-left" size={26} color="#FFFFFF" />
             </TouchableOpacity>
             <View style={styles.heroTopRight}>
               <TouchableOpacity style={styles.heroCircleBtn}>
-                <Text style={styles.heroBtnText}>♡</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.heroCircleBtn, { marginLeft: 10 }]}>
-                <Text style={styles.heroBtnText}>⤴</Text>
+                <Feather name="heart" size={23} color="#FFFFFF" />
               </TouchableOpacity>
             </View>
           </View>
@@ -421,10 +420,10 @@ export default function TherapistDetailScreen({
         <View style={styles.infoSection}>
           <Text style={styles.therapistName}>{therapist.name}</Text>
           <View style={styles.metaRow}>
-            <Text style={styles.metaIcon}>⊙</Text>
+            <Feather name="map-pin" size={13} color={COLORS.subText} style={styles.metaIcon} />
             <Text style={styles.metaText}>{distanceText}</Text>
             <Text style={styles.metaDivider}> | </Text>
-            <Text style={styles.starIcon}>⭐</Text>
+            <Feather name="star" size={14} color={COLORS.gold} style={styles.starIcon} />
             <Text style={styles.ratingValue}>{combinedRating.toFixed(1)}</Text>
             <Text style={styles.reviewLink}>({totalReviewCount} {t.reviewCount})</Text>
           </View>
@@ -434,7 +433,7 @@ export default function TherapistDetailScreen({
         <View style={styles.zenaCareBox}>
           <View style={styles.zenaCareLeft}>
             <View style={styles.zenaCareIcon}>
-              <Text style={styles.zenaCareCheckBig}>✅</Text>
+              <Feather name="check-circle" size={30} color={COLORS.green} />
             </View>
             <Text style={styles.zenaCareBrand}>
               zena<Text style={styles.zenaCareBoldText}>Care</Text>
@@ -442,11 +441,11 @@ export default function TherapistDetailScreen({
           </View>
           <View style={styles.zenaCareRight}>
             <View style={styles.zenaCareRow}>
-              <Text style={styles.zenaCareCheck}>☑️</Text>
+              <Feather name="check-square" size={17} color={COLORS.subText} style={styles.zenaCareCheck} />
               <Text style={styles.zenaCareText}>{t.careNoTip}</Text>
             </View>
             <View style={styles.zenaCareRow}>
-              <Text style={styles.zenaCareCheck}>☑️</Text>
+              <Feather name="check-square" size={17} color={COLORS.subText} style={styles.zenaCareCheck} />
               <Text style={styles.zenaCareText}>{t.careRefund}</Text>
             </View>
           </View>
@@ -504,7 +503,7 @@ export default function TherapistDetailScreen({
                       style={styles.checkCircle}
                       onPress={() => toggleService(svc.name)}
                     >
-                      <Text style={styles.checkCircleIcon}>✓</Text>
+                      <Feather name="check" size={22} color={COLORS.green} />
                     </TouchableOpacity>
                   ) : (
                     <TouchableOpacity
@@ -544,7 +543,7 @@ export default function TherapistDetailScreen({
               {breakdown.map((b) => (
                 <View key={b.stars} style={styles.barRow}>
                   <Text style={styles.barStarNum}>{b.stars}</Text>
-                  <Text style={styles.barStarIcon}>⭐</Text>
+                  <Feather name="star" size={10} color={COLORS.gold} style={styles.barStarIcon} />
                   <View style={styles.barTrack}>
                     <View
                       style={[
@@ -567,7 +566,7 @@ export default function TherapistDetailScreen({
             <View key={review.id} style={styles.reviewItem}>
               <View style={styles.reviewTop}>
                 <View style={styles.reviewAvatarCircle}>
-                  <Text style={styles.reviewAvatarEmoji}>{review.avatar}</Text>
+                  <Feather name="user" size={20} color={COLORS.green} />
                 </View>
                 <View style={styles.reviewMeta}>
                   <Text style={styles.reviewUser}>{review.userLabel}</Text>
@@ -578,7 +577,7 @@ export default function TherapistDetailScreen({
               <Text style={styles.reviewComment}>{review.comment}</Text>
               {review.hasTranslate && (
                 <View style={styles.translateRow}>
-                  <Text style={styles.translateIcon}>🔄</Text>
+                  <Feather name="refresh-cw" size={12} color={COLORS.subText} style={styles.translateIcon} />
                   <Text style={styles.translateLabel}>{t.showingOriginal} </Text>
                   <Text style={styles.translateLink}>{t.translate}</Text>
                 </View>
@@ -615,7 +614,7 @@ export default function TherapistDetailScreen({
             style={[styles.photoViewerCloseBtn, { top: photoViewerCloseTop }]}
             onPress={() => setShowPhotoViewer(false)}
           >
-            <Text style={styles.photoViewerCloseIcon}>✕</Text>
+            <Feather name="x" size={24} color="#FFFFFF" />
           </TouchableOpacity>
           {hasPhotos ? (
             <FlatList
@@ -645,9 +644,7 @@ export default function TherapistDetailScreen({
             />
           ) : (
             <View style={styles.photoViewerSlide}>
-              <Text style={styles.photoViewerEmoji}>
-                {therapist.gender === 'female' ? '👩' : '👨'}
-              </Text>
+              <Feather name="user" size={112} color="rgba(255,255,255,0.75)" />
               <Text style={styles.photoViewerNoPhoto}>{t.noPhoto}</Text>
             </View>
           )}
@@ -728,11 +725,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  photoViewerCloseIcon: {
-    color: '#fff',
-    fontSize: 22,
-    fontWeight: '600',
-  },
   photoViewerSlide: {
     width: SCREEN_WIDTH,
     height: SCREEN_HEIGHT,
@@ -757,16 +749,10 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
-  photoViewerEmoji: {
-    fontSize: 120,
-  },
   photoViewerNoPhoto: {
     color: 'rgba(255,255,255,0.7)',
     fontSize: 16,
     marginTop: 16,
-  },
-  heroEmoji: {
-    fontSize: 120,
   },
   heroTopBar: {
     position: 'absolute',
@@ -787,11 +773,6 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.35)',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  heroBtnText: {
-    color: '#fff',
-    fontSize: 22,
-    fontWeight: '600',
   },
   heroBottomBar: {
     position: 'absolute',
@@ -894,9 +875,6 @@ const styles = StyleSheet.create({
   },
   zenaCareIcon: {
     marginBottom: 4,
-  },
-  zenaCareCheckBig: {
-    fontSize: 28,
   },
   zenaCareBrand: {
     fontSize: 12,
@@ -1020,12 +998,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  checkCircleIcon: {
-    fontSize: 20,
-    fontWeight: '800',
-    color: COLORS.green,
-  },
-
   // Reviews
   reviewsSection: {
     paddingHorizontal: 20,
@@ -1121,9 +1093,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 10,
-  },
-  reviewAvatarEmoji: {
-    fontSize: 20,
   },
   reviewMeta: {
     flex: 1,

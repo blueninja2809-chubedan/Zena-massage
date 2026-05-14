@@ -1,3 +1,4 @@
+import Feather from '@expo/vector-icons/Feather';
 import { AppColors } from '@/constants/appColors';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useUser } from '@/contexts/UserContext';
@@ -49,13 +50,13 @@ const COLORS = {
   dot: '#5F8F47',
 };
 
-const NOTIF_ICON: Record<Notification['type'], { emoji: string; bg: string; color: string }> = {
-  booking: { emoji: '📋', bg: AppColors.primarySoft, color: AppColors.primaryDark },
-  promotion: { emoji: '🎁', bg: '#FFF3E0', color: '#F57C00' },
-  reminder: { emoji: '⏰', bg: '#FFF8E1', color: '#FFA000' },
-  review: { emoji: '⭐', bg: '#FFFDE7', color: '#F9A825' },
-  support: { emoji: '💬', bg: '#E8F5E9', color: '#388E3C' },
-  job: { emoji: '💼', bg: '#E8EAF6', color: '#3F51B5' },
+const NOTIF_ICON: Record<Notification['type'], { name: keyof typeof Feather.glyphMap; bg: string; color: string }> = {
+  booking: { name: 'clipboard', bg: AppColors.primarySoft, color: AppColors.primaryDark },
+  promotion: { name: 'gift', bg: '#FFF3E0', color: '#F57C00' },
+  reminder: { name: 'clock', bg: '#FFF8E1', color: '#FFA000' },
+  review: { name: 'star', bg: '#FFFDE7', color: '#F9A825' },
+  support: { name: 'message-circle', bg: '#E8F5E9', color: '#388E3C' },
+  job: { name: 'briefcase', bg: '#E8EAF6', color: '#3F51B5' },
 };
 
 type NotificationNavigateTarget = 'job' | 'booking';
@@ -150,7 +151,7 @@ export default function NotificationScreen({
         onPress={() => handleTapNotification(item)}
       >
         <View style={[styles.notifIconWrap, { backgroundColor: icon.bg }]}>
-          <Text style={styles.notifIconEmoji}>{icon.emoji}</Text>
+          <Feather name={icon.name} size={20} color={icon.color} />
         </View>
         <View style={styles.notifBody}>
           <View style={styles.notifTitleRow}>
@@ -173,7 +174,7 @@ export default function NotificationScreen({
       {/* Header */}
       <View style={styles.header}>
         <Pressable style={styles.backBtn} onPress={onClose} hitSlop={12}>
-          <Text style={styles.backIcon}>←</Text>
+          <Feather name="arrow-left" size={22} color={COLORS.text} />
         </Pressable>
         <Text style={styles.headerTitle}>{strings.title}</Text>
         {unreadCount > 0 ? (
@@ -218,7 +219,7 @@ export default function NotificationScreen({
         </View>
       ) : filteredNotifications.length === 0 ? (
         <View style={styles.emptyContainer}>
-          <Text style={styles.emptyEmoji}>🔔</Text>
+          <Feather name="bell" size={52} color={COLORS.subText} style={styles.emptyIcon} />
           <Text style={styles.emptyText}>{strings.noNotifications}</Text>
         </View>
       ) : (
@@ -256,11 +257,6 @@ const styles = StyleSheet.create({
     height: 38,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  backIcon: {
-    fontSize: 22,
-    color: COLORS.text,
-    fontWeight: '600',
   },
   headerTitle: {
     fontSize: 18,
@@ -309,9 +305,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E1E7DD',
   },
-  notifIconEmoji: {
-    fontSize: 17,
-  },
   notifBody: {
     flex: 1,
   },
@@ -356,11 +349,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingBottom: 80,
   },
-  emptyEmoji: {
-    fontSize: 56,
-    marginBottom: 16,
-    opacity: 0.4,
-  },
+  emptyIcon: { marginBottom: 16, opacity: 0.45 },
   emptyText: {
     fontSize: 16,
     color: COLORS.subText,
