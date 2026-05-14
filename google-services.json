@@ -1,0 +1,46 @@
+{
+  "project_info": {
+    "project_number": "629378314288",
+    "project_id": "massage-now-82eb8",
+    "storage_bucket": "massage-now-82eb8.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:629378314288:android:4bc29132c62da33795fdf5",
+        "android_client_info": {
+          "package_name": "com.zena.massagenow"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "629378314288-qj3p5l3fatvn8vkbsi9fcd6h6t8i9ohb.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBXFX555hIQVdzARydH-moo9hzhGEcnjmM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "629378314288-1ndjgqv9e9vcorhp6ijatpoafi5565vl.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "629378314288-qso945tioe4tdphsnptqjtbrvhd3scd7.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.zena.massagenow"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -38,6 +38,7 @@ ios-last-build.log
 # Play Console upload (EAS Submit) — không commit JSON service account
 credentials/
 
+
 # typescript
 *.tsbuildinfo
 
