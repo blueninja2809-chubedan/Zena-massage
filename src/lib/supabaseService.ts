@@ -2063,7 +2063,7 @@ export async function getTherapistIdsByCity(city: string): Promise<string[]> {
     rows = rpcData as { id: string; working_city: string | null }[];
   } else {
     // Fallback: direct table query (works when GRANT SELECT on profiles is in place)
-    if (__DEV__) console.warn('[getTherapistIdsByCity] RPC failed, trying direct query:', rpcError?.message);
+    console.warn('[getTherapistIdsByCity] RPC failed, trying direct query:', rpcError?.message);
     const { data, error } = await withTimeout(
       supabase
         .from('profiles')
@@ -2072,7 +2072,7 @@ export async function getTherapistIdsByCity(city: string): Promise<string[]> {
         .not('push_token', 'is', null),
     );
     if (error || !data) {
-      if (__DEV__) console.warn('[getTherapistIdsByCity] direct query also failed:', error?.message);
+      console.warn('[getTherapistIdsByCity] direct query also failed:', error?.message);
       return [];
     }
     rows = data as { id: string; working_city: string | null }[];
@@ -2086,7 +2086,7 @@ export async function getTherapistIdsByCity(city: string): Promise<string[]> {
       return wc.includes(cityLower) || cityLower.includes(wc);
     })
     .map((r) => r.id);
-  if (__DEV__) console.log('[getTherapistIdsByCity] city:', city, '→ found', matched.length, 'of', rows.length, 'therapists with push tokens');
+  console.log('[getTherapistIdsByCity] city:', city, '→ found', matched.length, 'of', rows.length, 'therapists with push tokens');
   return matched;
 }
 
