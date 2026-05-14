@@ -12,14 +12,15 @@ function expoChannelForData(data?: Record<string, unknown>): string {
 }
 
 /**
- * Send one push via Expo Push API (works from app or Edge Function payload shape).
+ * Send one push via Expo Push API. Returns true if accepted, false if device
+ * is no longer registered (caller should clear the stale token).
  */
 export async function sendPushNotification(
   expoPushToken: string,
   title: string,
   body: string,
   data?: Record<string, unknown>,
-): Promise<void> {
+): Promise<boolean> {
   const channelId = expoChannelForData(data);
   const message: Record<string, unknown> = {
     to: expoPushToken,
@@ -39,10 +40,24 @@ export async function sendPushNotification(
     },
     body: JSON.stringify(message),
   });
-  if (__DEV__) {
-    const result = await resp.json().catch(() => null);
-    console.log('[Push] Expo API response:', JSON.stringify(result));
+
+  try {
+    const result = await resp.json();
+    if (__DEV__) console.log('[Push] Expo API response:', JSON.stringify(result));
+
+    // Check for DeviceNotRegistered — token is stale and should be cleared.
+    const ticket = Array.isArray(result?.data) ? result.data[0] : result;
+    if (ticket?.status === 'error') {
+      console.warn('[Push] Expo push error:', ticket.message, ticket.details?.error);
+      if (ticket.details?.error === 'DeviceNotRegistered') {
+        return false; // Signal caller to clear stale token
+      }
+    }
+  } catch {
+    // Response parsing failed — treat as non-fatal
   }
+
+  return true;
 }
 
 /** Fetch push token for a single user — uses SECURITY DEFINER RPC to bypass RLS. */
@@ -65,6 +80,11 @@ async function fetchPushToken(userId: string): Promise<string | null> {
   return typeof profile?.push_token === 'string' && profile.push_token.length > 0
     ? profile.push_token
     : null;
+}
+
+/** Clear stale push token from profiles when Expo reports DeviceNotRegistered. */
+async function clearPushToken(userId: string): Promise<void> {
+  await supabase.rpc('save_push_token', { p_uid: userId, p_token: '' }).catch(() => {});
 }
 
 /** Fetch push tokens for multiple users — uses SECURITY DEFINER RPC. */
@@ -102,9 +122,13 @@ export async function sendPushToUser(
   const token = await fetchPushToken(userId);
   if (token) {
     if (__DEV__) console.log('[Push] Sending to userId:', userId, 'token:', token.slice(0, 30));
-    await sendPushNotification(token, title, body, data);
+    const registered = await sendPushNotification(token, title, body, data);
+    if (!registered) {
+      console.warn('[Push] DeviceNotRegistered — clearing stale token for userId:', userId);
+      await clearPushToken(userId);
+    }
   } else {
-    if (__DEV__) console.warn('[Push] No push_token for userId:', userId);
+    console.warn('[Push] No push_token found for userId:', userId);
   }
 }
 
@@ -118,7 +142,7 @@ export async function sendPushToUsers(
 
   const tokens = await fetchPushTokens(userIds);
   if (tokens.length === 0) {
-    if (__DEV__) console.warn('[Push] No push tokens found for', userIds.length, 'users');
+    console.warn('[Push] No push tokens found for', userIds.length, 'users');
     return;
   }
 

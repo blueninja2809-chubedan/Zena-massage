@@ -285,7 +285,8 @@ async function savePushTokenToProfile(uid: string, token: string) {
     p_token: token,
   });
   if (error) {
-    console.warn('[Notifications] Failed to save push token:', error.message);
+    // Log in production — mất token khiến KTV không nhận được đơn.
+    console.warn('[Notifications] Failed to save push token to DB:', error.message, 'uid:', uid);
   } else {
     if (__DEV__) console.log('[Notifications] Push token saved for uid:', uid, 'token:', token.slice(0, 30));
   }
@@ -584,7 +585,8 @@ export function NotificationProvider({
     setJobOffer(null);
   }, [user?.authUid]);
 
-  // Register push token mỗi khi đổi user và mỗi khi app vào foreground (token có thể đổi sau update OS).
+  // Register push token mỗi khi đổi user, mỗi khi app vào foreground, và định kỳ 6 giờ/lần.
+  // KTV cần token luôn hợp lệ để nhận đơn mới — refresh chủ động tránh stale token.
   useEffect(() => {
     const uid = user?.authUid;
     if (!uid) {
@@ -600,17 +602,27 @@ export function NotificationProvider({
         setExpoPushToken(token);
         await savePushTokenToProfile(uid, token);
       } catch (e) {
-        if (__DEV__) console.warn('[Notifications] register failed:', e);
+        console.warn('[Notifications] register/save token failed:', e);
       }
     };
 
     void ensureToken();
+
+    // Foreground trigger
     const sub = AppState.addEventListener('change', (state) => {
       if (state === 'active') void ensureToken();
     });
+
+    // Periodic refresh: mỗi 6 giờ đảm bảo token vẫn còn hiệu lực (quan trọng cho KTV).
+    const REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
+    const periodicTimer = setInterval(() => {
+      if (!cancelled) void ensureToken();
+    }, REFRESH_INTERVAL_MS);
+
     return () => {
       cancelled = true;
       sub.remove();
+      clearInterval(periodicTimer);
     };
   }, [user?.authUid]);
 

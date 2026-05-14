@@ -1912,7 +1912,7 @@ function BookingSearchModal({
           bookingPayload.date,
           bookingPayload.time,
           addressLabel,
-        ).catch(() => {});
+        ).catch((e) => console.warn('[Booking] notifyAssignedTherapistJob failed:', e));
 
         notifyNewJobForCity(
           jobCity,
@@ -1923,7 +1923,7 @@ function BookingSearchModal({
           bookingPayload.time,
           addressLabel,
           currentAssignedTherapist.id,
-        ).catch(() => {});
+        ).catch((e) => console.warn('[Booking] notifyNewJobForCity failed:', e));
 
         if (paymentMethod === 'payos' && user?.authUid) {
           const payosRes = await createPayOSPayment(user.authUid, finalTotal, 'Dat lich Zena', bookingId);
@@ -2087,7 +2087,7 @@ function BookingSearchModal({
             new Date().toISOString().slice(0, 10),
             `${String(new Date().getHours()).padStart(2, '0')}:${String(new Date().getMinutes()).padStart(2, '0')}`,
             addressLabel,
-          ).catch(() => {});
+          ).catch((e) => console.warn('[Booking] notifyAssignedTherapistJob (swap) failed:', e));
           setActiveTherapistId(t.id);
           setShowPopup(false);
         } catch {
