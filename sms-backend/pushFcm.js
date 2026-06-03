@@ -5,9 +5,19 @@
  * App lưu token thiết bị gốc vào profiles.push_token (Android: FCM; iOS: FCM khi đã cấu hình Firebase + APNs).
  */
 
-const admin = require('firebase-admin');
 const fs = require('fs');
 const path = require('path');
+
+/** Lazy load — OTP backend vẫn chạy nếu chưa cài firebase-admin (Hostinger zip thiếu dep). */
+let admin = null;
+try {
+  // eslint-disable-next-line global-require
+  admin = require('firebase-admin');
+} catch (e) {
+  console.warn(
+    '[FCM] firebase-admin chưa cài — route /api/push/fcm tắt. Chạy: npm install firebase-admin',
+  );
+}
 
 let messagingSingleton = null;
 
@@ -33,6 +43,9 @@ function loadServiceAccountJson() {
 }
 
 function getMessagingOrNull() {
+  if (!admin) {
+    return null;
+  }
   if (messagingSingleton) {
     return messagingSingleton;
   }

@@ -15,7 +15,7 @@ require('dotenv').config({ path: path.join(__dirname, '.env') });
 const app = express();
 
 const PORT = Number(process.env.PORT || 3000);
-/** Listen address — must be 0.0.0.0 on VPS so phones reach OTP/PayOS (not only localhost). */
+/** Listen address — must be 0.0.0.0 on VPS so phones reach OTP (not only localhost). */
 const HOST = (process.env.HOST ?? '0.0.0.0').trim() || '0.0.0.0';
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || '*';
 const SMS_API_KEY = process.env.SMS_API_KEY || '';
@@ -24,7 +24,13 @@ const OTP_DEV_FALLBACK_ON_SEND_FAIL = process.env.OTP_DEV_FALLBACK_ON_SEND_FAIL 
 /** Set to 1 to log each VietGuys-bound request (pwd / token values are redacted). */
 const VIETGUYS_DEBUG_LOG = process.env.VIETGUYS_DEBUG_LOG === '1';
 const OTP_LENGTH = 6;
+/** Max SMS OTP send requests per phone before cooldown (signup, forgot password, resend — shared). */
+const OTP_SEND_MAX_ATTEMPTS = Number(process.env.OTP_SEND_MAX_ATTEMPTS || 3);
+/** Cooldown after OTP_SEND_MAX_ATTEMPTS sends (default 10 minutes). */
+const OTP_SEND_COOLDOWN_MS = Number(process.env.OTP_SEND_COOLDOWN_MS || 10 * 60 * 1000);
 const otpStore = new Map();
+/** phone -> { sendCount, blockedUntil } */
+const otpSendRateStore = new Map();
 
 const vietGuysHttpsAgent = new https.Agent({
   lookup: (hostname, opts, cb) => dns.lookup(hostname, { ...opts, family: 4 }, cb),
@@ -158,69 +164,9 @@ if (!VIETGUYS_USERNAME || !vietGuysHasSmsCredential() || !VIETGUYS_BRANDNAME) {
   console.warn('[WARN] Missing VietGuys env vars (VIETGUYS_USERNAME, VIETGUYS_BRANDNAME, and one of: VIETGUYS_REFRESH_TOKEN — hoặc VIETGUYS_PASSCODE / VIETGUYS_ACCESS_TOKEN). OTP endpoints will fail until configured.');
 }
 
-// ── PayOS configuration ──
-const PAYOS_CLIENT_ID = process.env.PAYOS_CLIENT_ID || '';
-const PAYOS_API_KEY = process.env.PAYOS_API_KEY || '';
-const PAYOS_CHECKSUM_KEY = process.env.PAYOS_CHECKSUM_KEY || '';
-const PAYOS_BASE_URL = 'https://api-merchant.payos.vn';
-
-// PayOS Cloudflare has broken IPv6 TLS – force IPv4 via custom https.Agent
-const payosAgent = new https.Agent({
-  lookup: (hostname, opts, cb) => dns.lookup(hostname, { ...opts, family: 4 }, cb),
-});
-
-/**
- * Wrapper around fetch that forces IPv4 for PayOS API calls.
- * Node.js v24 defaults to IPv6 which causes TLS ECONNRESET with PayOS Cloudflare.
- */
-async function payosFetch(url, options = {}) {
-  // Node.js v24 defaults to IPv6; PayOS Cloudflare has broken IPv6 TLS.
-  // We use https.request with a custom agent that forces IPv4.
-  return new Promise((resolve, reject) => {
-    const parsedUrl = new URL(url);
-    const bodyStr = options.body || null;
-    const reqOpts = {
-      hostname: parsedUrl.hostname,
-      port: 443,
-      path: parsedUrl.pathname + parsedUrl.search,
-      method: options.method || 'GET',
-      agent: payosAgent,
-      headers: { ...(options.headers || {}) },
-    };
-    if (bodyStr) reqOpts.headers['Content-Length'] = Buffer.byteLength(bodyStr);
-
-    const req = https.request(reqOpts, (res) => {
-      let data = '';
-      res.on('data', (chunk) => (data += chunk));
-      res.on('end', () => {
-        resolve({
-          ok: res.statusCode >= 200 && res.statusCode < 300,
-          status: res.statusCode,
-          json: () => Promise.resolve(JSON.parse(data)),
-          text: () => Promise.resolve(data),
-        });
-      });
-    });
-    req.on('error', reject);
-    req.setTimeout(15000, () => { req.destroy(new Error('PayOS request timeout')); });
-    if (bodyStr) req.write(bodyStr);
-    req.end();
-  });
-}
-
-// Supabase config (for updating wallet after PayOS webhook)
+// Supabase (OTP reset password + FCM push)
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || '';
-
-if (!PAYOS_CLIENT_ID || !PAYOS_API_KEY || !PAYOS_CHECKSUM_KEY) {
-  console.warn('[WARN] Missing PayOS env vars (PAYOS_CLIENT_ID, PAYOS_API_KEY, PAYOS_CHECKSUM_KEY). PayOS endpoints will fail.');
-}
-
-function payosSignature(data, checksumKey) {
-  const sortedKeys = Object.keys(data).sort();
-  const raw = sortedKeys.map((k) => `${k}=${data[k]}`).join('&');
-  return crypto.createHmac('sha256', checksumKey).update(raw).digest('hex');
-}
 
 async function supabaseRpc(fnName, params) {
   if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
@@ -240,21 +186,6 @@ async function supabaseRpc(fnName, params) {
     throw new Error(`Supabase RPC ${fnName} failed: ${res.status} ${text}`);
   }
   return res.json();
-}
-
-async function supabaseRestInsert(table, row) {
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) return false;
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      apikey: SUPABASE_SERVICE_KEY,
-      Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
-      Prefer: 'return=minimal',
-    },
-    body: JSON.stringify(row),
-  });
-  return res.ok;
 }
 
 app.use(helmet());
@@ -288,6 +219,60 @@ function getStoredOtp(phone) {
     otpStore.delete(phone);
     return null;
   }
+  return entry;
+}
+
+function getOtpSendRateEntry(phone) {
+  const entry = otpSendRateStore.get(phone);
+  if (!entry) return null;
+  const now = Date.now();
+  if (entry.blockedUntil && entry.blockedUntil <= now) {
+    otpSendRateStore.delete(phone);
+    return null;
+  }
+  return entry;
+}
+
+function checkOtpSendRateLimit(phone) {
+  const entry = getOtpSendRateEntry(phone);
+  const now = Date.now();
+  if (!entry) {
+    return {
+      allowed: true,
+      remainingAttempts: OTP_SEND_MAX_ATTEMPTS,
+    };
+  }
+  if (entry.blockedUntil && entry.blockedUntil > now) {
+    return {
+      allowed: false,
+      remainingAttempts: 0,
+      retryAfterMs: entry.blockedUntil - now,
+    };
+  }
+  const used = entry.sendCount || 0;
+  if (used >= OTP_SEND_MAX_ATTEMPTS) {
+    entry.blockedUntil = now + OTP_SEND_COOLDOWN_MS;
+    otpSendRateStore.set(phone, entry);
+    return {
+      allowed: false,
+      remainingAttempts: 0,
+      retryAfterMs: OTP_SEND_COOLDOWN_MS,
+    };
+  }
+  return {
+    allowed: true,
+    remainingAttempts: Math.max(0, OTP_SEND_MAX_ATTEMPTS - used),
+  };
+}
+
+function recordOtpSendAttempt(phone) {
+  const now = Date.now();
+  let entry = getOtpSendRateEntry(phone) || { sendCount: 0, blockedUntil: 0 };
+  entry.sendCount = (entry.sendCount || 0) + 1;
+  if (entry.sendCount >= OTP_SEND_MAX_ATTEMPTS) {
+    entry.blockedUntil = now + OTP_SEND_COOLDOWN_MS;
+  }
+  otpSendRateStore.set(phone, entry);
   return entry;
 }
 
@@ -436,6 +421,24 @@ app.post('/api/send-otp', requireApiKey, async (req, res) => {
       });
     }
 
+    const rate = checkOtpSendRateLimit(phoneNumber);
+    if (!rate.allowed) {
+      const retryMin = Math.max(1, Math.ceil((rate.retryAfterMs || OTP_SEND_COOLDOWN_MS) / 60000));
+      return res.status(429).json({
+        success: false,
+        message: `Bạn đã gửi mã OTP quá nhiều lần. Vui lòng thử lại sau ${retryMin} phút hoặc liên hệ hỗ trợ.`,
+        error: 'otp-rate-limited',
+        retryAfterMs: rate.retryAfterMs || OTP_SEND_COOLDOWN_MS,
+        remainingAttempts: 0,
+      });
+    }
+
+    recordOtpSendAttempt(phoneNumber);
+    const afterSend = getOtpSendRateEntry(phoneNumber);
+    const remainingAttempts = afterSend
+      ? Math.max(0, OTP_SEND_MAX_ATTEMPTS - (afterSend.sendCount || 0))
+      : OTP_SEND_MAX_ATTEMPTS;
+
     const otp = generateOtpCode();
     let usingLocalFallback = false;
     try {
@@ -461,6 +464,7 @@ app.post('/api/send-otp', requireApiKey, async (req, res) => {
       message: usingLocalFallback
         ? `VietGuys tạm lỗi sender, dùng OTP test: ${otp}`
         : 'Đã gửi mã OTP qua SMS (brandname CSKH). Vui lòng kiểm tra tin nhắn.',
+      remainingAttempts,
     });
   } catch (error) {
     const code = error?.code ? String(error.code) : 'send-otp-failed';
@@ -644,222 +648,6 @@ app.post('/api/reset-password-phone', requireApiKey, async (req, res) => {
       message: 'Không thể đặt lại mật khẩu.',
       error: `${code}: ${detail}`,
     });
-  }
-});
-
-// ── PayOS: Create payment link (QR code) ──
-app.post('/api/payos/create-payment', requireApiKey, async (req, res) => {
-  try {
-    const { userId, amount, description } = req.body || {};
-    if (!userId || !amount || amount <= 0) {
-      return res.status(400).json({ success: false, message: 'userId and positive amount required' });
-    }
-
-    const orderCode = Math.floor(Date.now() / 1000); // unique order code (PayOS requires < 2^53)
-    const returnUrl = req.body.returnUrl || 'https://massage-now.app/payment-success';
-    const cancelUrl = req.body.cancelUrl || 'https://massage-now.app/payment-cancel';
-
-    // PayOS description: ASCII only, max 25 chars
-    const desc = (description || `Nap tien ${Number(amount).toLocaleString('vi-VN')}d`).substring(0, 25);
-
-    const paymentData = {
-      orderCode,
-      amount: Number(amount),
-      description: desc,
-      returnUrl,
-      cancelUrl,
-      buyerName: userId,
-    };
-
-    // Create checksum signature
-    const signData = {
-      amount: paymentData.amount,
-      cancelUrl: paymentData.cancelUrl,
-      description: paymentData.description,
-      orderCode: paymentData.orderCode,
-      returnUrl: paymentData.returnUrl,
-    };
-    const signature = payosSignature(signData, PAYOS_CHECKSUM_KEY);
-    paymentData.signature = signature;
-
-    console.log('[PayOS] Creating payment:', { orderCode: paymentData.orderCode, amount: paymentData.amount, description: paymentData.description });
-    console.log('[PayOS] Using client_id:', PAYOS_CLIENT_ID ? PAYOS_CLIENT_ID.substring(0, 8) + '...' : 'MISSING');
-
-    let response;
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      try {
-        response = await payosFetch(`${PAYOS_BASE_URL}/v2/payment-requests`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-client-id': PAYOS_CLIENT_ID,
-            'x-api-key': PAYOS_API_KEY,
-          },
-          body: JSON.stringify(paymentData),
-        });
-        break; // success, exit retry loop
-      } catch (fetchErr) {
-        console.warn(`[PayOS] Fetch attempt ${attempt}/3 failed:`, fetchErr.message);
-        if (attempt === 3) throw fetchErr;
-        await new Promise((r) => setTimeout(r, 1000 * attempt)); // backoff
-      }
-    }
-
-    const result = await response.json();
-
-    if (result.code !== '00' || !result.data) {
-      console.error('[PayOS] Create payment failed:', result);
-      return res.status(400).json({
-        success: false,
-        message: result.desc || 'Failed to create PayOS payment',
-        error: result,
-      });
-    }
-
-    const bookingId = typeof req.body.bookingId === 'string' ? req.body.bookingId.trim() : '';
-    const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-    if (bookingId && uuidRe.test(bookingId)) {
-      const inserted = await supabaseRestInsert('payos_booking_orders', {
-        order_code: result.data.orderCode,
-        booking_id: bookingId,
-        user_id: userId,
-        amount: Number(amount),
-      });
-      if (!inserted) {
-        console.error('[PayOS] Failed to register booking order in Supabase');
-        return res.status(500).json({
-          success: false,
-          message: 'Failed to register booking payment',
-        });
-      }
-    }
-
-    return res.json({
-      success: true,
-      data: {
-        orderCode: result.data.orderCode,
-        checkoutUrl: result.data.checkoutUrl,
-        qrCode: result.data.qrCode,
-        amount: result.data.amount,
-      },
-    });
-  } catch (error) {
-    console.error('[PayOS] Error:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Failed to create payment',
-      error: String(error.message || error),
-    });
-  }
-});
-
-// ── PayOS: Check payment status ──
-app.get('/api/payos/payment-status/:orderCode', requireApiKey, async (req, res) => {
-  try {
-    const { orderCode } = req.params;
-    const response = await payosFetch(`${PAYOS_BASE_URL}/v2/payment-requests/${orderCode}`, {
-      method: 'GET',
-      headers: {
-        'x-client-id': PAYOS_CLIENT_ID,
-        'x-api-key': PAYOS_API_KEY,
-      },
-    });
-
-    const result = await response.json();
-
-    if (result.code !== '00') {
-      return res.status(400).json({
-        success: false,
-        message: result.desc || 'Failed to check payment status',
-      });
-    }
-
-    return res.json({
-      success: true,
-      data: {
-        orderCode: result.data.orderCode,
-        status: result.data.status, // PENDING, PAID, CANCELLED, EXPIRED
-        amount: result.data.amount,
-        amountPaid: result.data.amountPaid,
-      },
-    });
-  } catch (error) {
-    return res.status(500).json({
-      success: false,
-      message: 'Failed to check payment status',
-      error: String(error.message || error),
-    });
-  }
-});
-
-// ── PayOS: Webhook (automatic payment confirmation) ──
-app.post('/api/payos/webhook', async (req, res) => {
-  try {
-    const webhookData = req.body;
-
-    // Verify webhook signature
-    if (webhookData.data && webhookData.signature) {
-      const computedSig = payosSignature(webhookData.data, PAYOS_CHECKSUM_KEY);
-      if (computedSig !== webhookData.signature) {
-        console.warn('[PayOS Webhook] Invalid signature');
-        return res.status(400).json({ success: false, message: 'Invalid signature' });
-      }
-    }
-
-    const data = webhookData.data || {};
-    const { orderCode, amount, description } = data;
-
-    // success = true means payment completed
-    if (webhookData.success && data.orderCode) {
-      console.log(`[PayOS Webhook] Payment ${orderCode} completed: ${amount} VND`);
-
-      // Service booking via payos_booking_orders — confirm booking, do NOT credit wallet
-      if (SUPABASE_URL && SUPABASE_SERVICE_KEY) {
-        try {
-          const bookingRpc = await supabaseRpc('complete_payos_booking_from_webhook', {
-            p_order_code: Number(orderCode),
-          });
-          if (bookingRpc && bookingRpc.ok === true) {
-            console.log(`[PayOS Webhook] Service booking confirmed for order ${orderCode}`);
-            return res.json({ success: true });
-          }
-        } catch (err) {
-          console.warn('[PayOS Webhook] Booking completion RPC failed:', err.message);
-        }
-      }
-
-      // Wallet top-up (top-up flow only — not linked to payos_booking_orders)
-      try {
-        const paymentResp = await payosFetch(`${PAYOS_BASE_URL}/v2/payment-requests/${orderCode}`, {
-          method: 'GET',
-          headers: {
-            'x-client-id': PAYOS_CLIENT_ID,
-            'x-api-key': PAYOS_API_KEY,
-          },
-        });
-        const paymentResult = await paymentResp.json();
-
-        if (paymentResult.code === '00' && paymentResult.data) {
-          const userId = paymentResult.data.buyerName; // we stored userId here
-          if (userId && SUPABASE_URL && SUPABASE_SERVICE_KEY) {
-            await supabaseRpc('wallet_topup', {
-              p_user_id: userId,
-              p_amount: Number(amount),
-              p_method: 'payos',
-            });
-            console.log(`[PayOS Webhook] Wallet topped up for user ${userId}: +${amount}`);
-          }
-        }
-      } catch (err) {
-        console.error('[PayOS Webhook] Failed to process wallet top-up:', err.message);
-      }
-    }
-
-    // Always respond 200 to acknowledge webhook
-    return res.json({ success: true });
-  } catch (error) {
-    console.error('[PayOS Webhook] Error:', error);
-    return res.json({ success: true }); // still 200 to prevent retries
   }
 });
 
